@@ -223,7 +223,7 @@ SOFTWARE_SECTION = Section(
         Category("nvim", "Neovim", "Neovim desde pacman y dependencias", "Instalador completo del módulo nvim.", scripts("nvim/install.sh")),
         Category("yazi", "Yazi", "File manager Yazi", "Instalador completo del módulo yazi.", scripts("yazi/install_yazi.sh")),
         Category("mongodb_compass", "MongoDB Compass", "GUI oficial MongoDB", "Descarga release oficial e instala en /opt.", scripts("mongodb_compass/install_compass.sh")),
-        Category("opencode", "Opencode", "Opencode CLI/config", "Instalador oficial de Opencode.", scripts("opencode/install_opencode.sh")),
+        Category("opencode", "Opencode", "Opencode CLI", "Instalador oficial de Opencode sin configuración.", scripts("opencode/install_opencode.sh")),
         Category("pi", "Pi Coding Agent", "Instala Pi, clona j0k3r-pi en ~/.pi/agent e instala subagents", "Acciones:\n- curl -fsSL https://pi.dev/install.sh | sh\n- clona/actualiza j0k3r-pi en ~/.pi/agent\n- pi install npm:pi-subagents-j0k3r", scripts("pi/install_pi.sh")),
         Category("claude_code", "Claude Code", "Claude Code CLI", "Instalador oficial de Claude Code.", scripts("claude_code/install_claude_code.sh")),
         Category("codex", "Codex", "Codex CLI via Homebrew", "Requiere Homebrew.", scripts("codex/install_codex.sh")),

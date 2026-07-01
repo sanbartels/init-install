@@ -276,6 +276,7 @@ def apply_sync_plan(
 DEFAULT_CONFIG_TARGETS: tuple[ConfigTarget, ...] = (
     ConfigTarget("hyprland", "Hyprland", "hyprland/configs", ".config/hypr", commands=("Hyprland", "hyprland")),
     ConfigTarget("mango", "Mango", "mango/configs", ".config/mango", commands=("mango",)),
+    ConfigTarget("wallpapers", "Wallpapers", "wallpapers/configs", ".config/wallpapers"),
     ConfigTarget("noctalia", "Noctalia Shell", "noctalia/configs", ".config/noctalia", commands=("qs",)),
     ConfigTarget("waybar", "Waybar", "waybar/configs", ".config/waybar", commands=("waybar",)),
     ConfigTarget("kitty", "Kitty", "kitty/configs", ".config/kitty", commands=("kitty",)),
@@ -284,5 +285,4 @@ DEFAULT_CONFIG_TARGETS: tuple[ConfigTarget, ...] = (
     ConfigTarget("wlogout", "wlogout", "wlogout/configs", ".config/wlogout", commands=("wlogout",)),
     ConfigTarget("nvim", "Neovim", "nvim/configs", ".config/nvim", commands=("nvim",)),
     ConfigTarget("yazi", "Yazi", "yazi/configs", ".config/yazi", commands=("yazi",)),
-    ConfigTarget("opencode", "Opencode", "opencode/configs", ".config/opencode", commands=("opencode",)),
 )

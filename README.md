@@ -107,7 +107,6 @@ Se ignoran carpetas ruidosas o peligrosas durante sync, como `.git`, `node_modul
 - wlogout: `wlogout/configs/`
 - Neovim: `nvim/configs/`
 - Yazi: `yazi/configs/`
-- Opencode: `opencode/configs/`
 
 ## Comandos de actualización
 

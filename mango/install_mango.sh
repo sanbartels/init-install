@@ -13,4 +13,7 @@ fi
 print_info "Instalando MangoWM desde AUR..."
 yay -S --needed --noconfirm mangowm-git
 
+print_info "Instalando dependencia de wallpaper..."
+sudo pacman -S --needed --noconfirm swaybg
+
 print_info "Mango instalado. Usa Import configs para copiar la configuración."

@@ -12,7 +12,7 @@ die() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 print_info "Instalando Hyprland y dependencias..."
-sudo pacman -S --needed --noconfirm hyprland
+sudo pacman -S --needed --noconfirm hyprland swaybg
 
 # Herramientas para capturas de pantalla (keybind: Print)
 print_info "Instalando herramientas de captura de pantalla..."
