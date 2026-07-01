@@ -216,7 +216,7 @@ SOFTWARE_SECTION = Section(
         Category("tts_tools", "TTS tools", "Piper/espeak para texto a voz", package_text("espeak-ng", "piper-tts", "piper-voices-es-ar"), internal_runner=install_yay_packages("TTS tools", ["espeak-ng", "piper-tts", "piper-voices-es-ar"])),
         Category("homebrew", "Homebrew", "Instala Homebrew global y de usuario", "Instala Homebrew y shellenv.", scripts("homebrew/install_homebrew.sh")),
         Category("docker", "Docker", "Docker y docker-compose", package_text("docker", "docker-compose"), scripts("docker/install_docker.sh")),
-        Category("nvim", "Neovim", "Neovim nightly y dependencias", "Instalador completo del módulo nvim.", scripts("nvim/install.sh")),
+        Category("nvim", "Neovim", "Neovim desde pacman y dependencias", "Instalador completo del módulo nvim.", scripts("nvim/install.sh")),
         Category("yazi", "Yazi", "File manager Yazi", "Instalador completo del módulo yazi.", scripts("yazi/install_yazi.sh")),
         Category("mongodb_compass", "MongoDB Compass", "GUI oficial MongoDB", "Descarga release oficial e instala en /opt.", scripts("mongodb_compass/install_compass.sh")),
         Category("opencode", "Opencode", "Opencode CLI/config", "Instalador oficial de Opencode.", scripts("opencode/install_opencode.sh")),
