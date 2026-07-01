@@ -30,8 +30,10 @@ echo ""
 print_step "Instalando Neovim desde pacman y dependencias..."
 if sudo pacman -S --needed --noconfirm \
     neovim \
-    git gcc make unzip ripgrep fd \
-    nodejs npm python python-pip python-pynvim \
+    git gcc make unzip curl ripgrep fd fzf lazygit \
+    nodejs-lts-krypton npm pnpm yarn bun \
+    python python-pip python-pynvim \
+    jdk-openjdk maven gradle \
     tree-sitter tree-sitter-cli wl-clipboard; then
     print_ok "Neovim y dependencias instalados"
 else

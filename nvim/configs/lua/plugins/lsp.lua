@@ -94,6 +94,7 @@ return {
             "jsonls",                  -- JSON
             "lua_ls",                  -- Lua
             "emmet_language_server",   -- Emmet para JSX/HTML
+            "jdtls",                   -- Java; lo activa nvim-jdtls via ftplugin
           },
           -- jdtls lo maneja nvim-jdtls via ftplugin
           automatic_enable = {

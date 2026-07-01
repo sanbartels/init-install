@@ -1,2 +1,4 @@
 .pi/workspace-code-graph/
 openspec/
+__pycache__/
+*.py[cod]

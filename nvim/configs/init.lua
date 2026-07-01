@@ -23,6 +23,7 @@ vim.g.maplocalleader = "\\"
 vim.opt.number         = true   -- numero absoluto en la linea actual
 vim.opt.relativenumber = true   -- numeros relativos en el resto (facilita saltar con Nj/Nk)
 vim.opt.signcolumn     = "yes"  -- siempre visible para no saltar el layout
+vim.opt.clipboard      = "unnamedplus" -- yank/delete usa el portapapeles del sistema
 
 
 
