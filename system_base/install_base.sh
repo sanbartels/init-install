@@ -31,4 +31,7 @@ sudo pacman -S --needed --noconfirm \
     nano \
     unzip \
     7zip \
-    tree
+    tree \
+    dosfstools \
+    exfatprogs \
+    zram-generator
