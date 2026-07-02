@@ -83,14 +83,14 @@ Reglas:
 - si es igual, omite
 - si no existe destino, copia sin backup
 - si existe destino y es diferente, pide confirmación
-- antes de actualizar algo diferente, crea backup en:
+- antes de reemplazar algo diferente, crea backup en:
 
 ```bash
 ~/.config_backups/init-install/<timestamp>/<target>/
 ```
 
-- copia solo archivos nuevos/modificados desde el repo
-- conserva archivos extra que existan solo en el destino local
+- elimina el destino de configuración y copia la fuente completa desde el repo
+- elimina archivos extra que existan solo en el destino local
 - no muestra contenidos de archivos en la confirmación
 
 ### Export configs

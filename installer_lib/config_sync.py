@@ -207,26 +207,6 @@ def _remove_path(path: Path) -> None:
         path.unlink()
 
 
-def _merge_path(source: Path, destination: Path) -> None:
-    if source.is_file():
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-        return
-
-    destination.mkdir(parents=True, exist_ok=True)
-    for child in sorted(source.rglob("*")):
-        relative = child.relative_to(source)
-        if any(part in IGNORED_NAMES for part in relative.parts):
-            continue
-        target = destination / relative
-        if child.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-        elif child.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists() or _file_hash(child) != _file_hash(target):
-                shutil.copy2(child, target)
-
-
 def _backup_destination(plan: SyncPlan, backup_root: Path, timestamp: str) -> Path:
     backup_path = backup_root / timestamp / plan.key
     if backup_path.exists():
@@ -262,11 +242,8 @@ def apply_sync_plan(
     backup_path: Path | None = None
     if plan.destination.exists():
         backup_path = _backup_destination(plan, backup_root, timestamp)
-        if plan.source.is_dir() and plan.destination.is_dir():
-            _merge_path(plan.source, plan.destination)
-        else:
-            _remove_path(plan.destination)
-            _copy_path(plan.source, plan.destination)
+        _remove_path(plan.destination)
+        _copy_path(plan.source, plan.destination)
         return SyncResult(plan.key, "updated", plan.source, plan.destination, backup_path=backup_path)
 
     _copy_path(plan.source, plan.destination)

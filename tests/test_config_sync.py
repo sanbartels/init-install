@@ -61,7 +61,7 @@ class ConfigSyncTests(unittest.TestCase):
             self.assertEqual((dest / "kitty.conf").read_text(encoding="utf-8"), "local")
             self.assertFalse(backup_root.exists())
 
-    def test_different_destination_is_backed_up_then_merged(self):
+    def test_different_destination_is_backed_up_then_replaced_exactly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "repo" / "noctalia"
@@ -71,7 +71,7 @@ class ConfigSyncTests(unittest.TestCase):
             dest.mkdir(parents=True)
             (source / "settings.json").write_text('{"theme":"repo"}', encoding="utf-8")
             (dest / "settings.json").write_text('{"theme":"local"}', encoding="utf-8")
-            (dest / "local-only.json").write_text("keep locally", encoding="utf-8")
+            (dest / "local-only.json").write_text("remove from destination", encoding="utf-8")
 
             plan = compare_paths("noctalia", source, dest)
             self.assertEqual(plan.status, "different")
@@ -85,8 +85,7 @@ class ConfigSyncTests(unittest.TestCase):
             self.assertTrue((backup_path / "settings.json").exists())
             self.assertTrue((backup_path / "local-only.json").exists())
             self.assertEqual((dest / "settings.json").read_text(encoding="utf-8"), '{"theme":"repo"}')
-            self.assertTrue((dest / "local-only.json").exists())
-            self.assertEqual((dest / "local-only.json").read_text(encoding="utf-8"), "keep locally")
+            self.assertFalse((dest / "local-only.json").exists())
 
     def test_config_target_resolves_repo_and_home_paths(self):
         root = Path("/repo")

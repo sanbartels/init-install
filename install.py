@@ -540,7 +540,7 @@ class InstallerApp:
                     "Export configs copia archivos desde ~/.config hacia este repo.",
                     "Revisa bien la selección para no guardar datos privados por accidente.",
                     "El sync ignora .git, node_modules, __pycache__ y .cache, pero no inspecciona contenidos.",
-                    "Si una config del repo difiere, se creará backup antes de actualizarla.",
+                    "Si una config del repo difiere, se creará backup antes de reemplazarla.",
                 ],
             )
         states = [evaluate_config_target(target, direction, SCRIPT_DIR, Path.home()) for target in DEFAULT_CONFIG_TARGETS]
@@ -608,8 +608,8 @@ class InstallerApp:
                 plan.summary,
                 "",
                 "Si confirmas, primero se crea backup del destino.",
-                "Luego se copian solo archivos nuevos/modificados desde la fuente.",
-                "Los archivos extra que existan solo en destino se conservan.",
+                "Luego se elimina el destino y se copia la fuente completa.",
+                "Los archivos extra que existan solo en destino se eliminan.",
                 "No se muestran contenidos para evitar exponer datos sensibles.",
                 "",
                 "S: confirmar  N/Q/Esc: omitir",
