@@ -32,9 +32,9 @@ class ConfigSyncPreflightTests(unittest.TestCase):
             root = Path(tmp)
             repo_root = root / "repo"
             home = root / "home"
-            (repo_root / "waybar" / "configs").mkdir(parents=True)
-            (repo_root / "waybar" / "configs" / "config").write_text("repo", encoding="utf-8")
-            target = ConfigTarget("waybar", "Waybar", "waybar/configs", ".config/waybar", commands=("waybar",))
+            (repo_root / "rofi" / "configs").mkdir(parents=True)
+            (repo_root / "rofi" / "configs" / "config.rasi").write_text("repo", encoding="utf-8")
+            target = ConfigTarget("rofi", "Rofi", "rofi/configs", ".config/rofi", commands=("rofi",))
 
             state = evaluate_config_target(target, "import", repo_root, home, command_exists=lambda command: False)
 

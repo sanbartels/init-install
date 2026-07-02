@@ -1,15 +1,27 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   swaync - GitHub Dark Theme (usa colores compartidos de waybar)
+   swaync - Electric Black Theme
    ═══════════════════════════════════════════════════════════════════════════ */
 
-@import "$HOME/.config/waybar/colors.css";
+@define-color bg          #030509;
+@define-color bg-glass    rgba(3, 5, 9, 0.84);
+@define-color surface     rgba(8, 13, 22, 0.92);
+@define-color surface2    rgba(13, 21, 35, 0.96);
+@define-color border      #12324a;
+@define-color text        #dffaff;
+@define-color text-muted  #8edcff;
+@define-color electric    #22d3ff;
+@define-color electric2   #38bdf8;
+@define-color violet      #60a5fa;
+@define-color green       #67e8f9;
+@define-color orange      #ffb020;
+@define-color red         #ff3b6b;
 
 * {
     font-family: "JetBrainsMono Nerd Font", monospace;
     font-size: 13px;
     border: none;
     border-radius: 0;
-    transition: all 0.15s ease;
+    transition: 280ms ease;
 }
 
 /* ─── Panel principal ────────────────────────────────────────────────────── */
@@ -17,160 +29,151 @@
 .control-center {
     background-image:
         linear-gradient(
-            to bottom,
-            alpha(@bg, 0.15) 0%,
-            alpha(@bg, 0.75) 130px,
-            @bg             190px
+            145deg,
+            alpha(@electric, 0.16) 0%,
+            alpha(@electric2, 0.12) 38%,
+            alpha(@bg, 0.94) 74%
         ),
         url("$HOME/wallpapers/profile.png");
-    background-color: @bg;
+    background-color: @bg-glass;
     background-size: cover;
     background-position: center top;
     background-repeat: no-repeat;
-    border: 1px solid @border;
-    border-radius: 16px;
-    padding: 12px;
-    box-shadow: 0 8px 32px alpha(black, 0.6);
+    border: 1px solid alpha(@electric, 0.55);
+    border-radius: 22px;
+    padding: 14px;
+    box-shadow:
+        0 0 0 1px alpha(@electric, 0.18) inset,
+        0 0 28px alpha(@electric2, 0.28),
+        0 18px 48px alpha(black, 0.72);
 }
 
-/* ─── Nombre de usuario ──────────────────────────────────────────────────── */
-
 #username {
-    margin: 120px 4px 10px 4px;
+    margin: 120px 6px 12px 6px;
 }
 
 #username label {
-    color: white;
+    color: @text;
     font-size: 15px;
     font-weight: bold;
+    text-shadow: 0 0 12px alpha(@electric, 0.95);
 }
 
-/* ─── Widget title ───────────────────────────────────────────────────────── */
+/* ─── Widgets ────────────────────────────────────────────────────────────── */
 
 .widget-title {
     color: @text-muted;
     font-size: 12px;
     font-weight: bold;
-    margin: 4px 0;
+    margin: 6px 0;
 }
 
-.widget-title > button {
-    color: @blue;
-    background: transparent;
+.widget-title > button,
+.notification-action {
+    color: @electric;
+    background: alpha(@electric, 0.08);
+    border: 1px solid alpha(@electric, 0.28);
+    border-radius: 999px;
+    padding: 5px 12px;
+    margin: 3px;
     font-size: 12px;
-    border-radius: 6px;
-    padding: 2px 8px;
+    box-shadow: 0 0 12px alpha(@electric, 0.12);
 }
 
-.widget-title > button:hover {
-    background: @surface2;
+.widget-title > button:hover,
+.notification-action:hover {
+    color: @bg;
+    background: @electric;
+    border-color: @electric;
+    box-shadow: 0 0 22px alpha(@electric, 0.72);
 }
 
-/* ─── DND toggle ─────────────────────────────────────────────────────────── */
-
-.widget-dnd {
+.widget-dnd,
+.widget-volume,
+.widget-buttons-grid > flowbox > flowboxchild > button {
     background: @surface;
-    border: 1px solid @border;
-    border-radius: 12px;
-    padding: 8px 14px;
-    margin: 4px 0;
+    border: 1px solid alpha(@electric2, 0.24);
+    border-radius: 16px;
     color: @text;
-    font-size: 13px;
+    padding: 10px 14px;
+    margin: 5px 0;
+    box-shadow: 0 8px 22px alpha(black, 0.35);
+}
+
+.widget-dnd:hover,
+.widget-volume:hover,
+.widget-buttons-grid > flowbox > flowboxchild > button:hover {
+    background: @surface2;
+    border-color: alpha(@electric, 0.70);
+    box-shadow: 0 0 20px alpha(@electric, 0.25);
 }
 
 .widget-dnd > switch {
-    border-radius: 12px;
+    border-radius: 999px;
     background: @surface2;
-    border: 1px solid @border;
+    border: 1px solid alpha(@electric, 0.35);
 }
 
 .widget-dnd > switch:checked {
-    background: @blue;
-    border-color: @blue;
+    background: alpha(@electric, 0.85);
+    border-color: @electric;
+    box-shadow: 0 0 18px alpha(@electric, 0.65);
 }
 
 .widget-dnd > switch slider {
     background: @text;
-    border-radius: 10px;
+    border-radius: 999px;
     min-width: 20px;
     min-height: 20px;
 }
 
-/* ─── Buttons grid ───────────────────────────────────────────────────────── */
-
 .widget-buttons-grid {
-    margin: 4px 0;
+    margin: 6px 0;
 }
 
 .widget-buttons-grid > flowbox > flowboxchild > button {
-    background: @surface;
-    border: 1px solid @border;
-    border-radius: 10px;
     color: @text-muted;
-    padding: 10px 14px;
-    margin: 3px;
-    font-size: 12px;
-}
-
-.widget-buttons-grid > flowbox > flowboxchild > button:hover {
-    background: @surface2;
-    border-color: @blue;
-    color: @cyan;
+    margin: 4px;
 }
 
 .widget-buttons-grid > flowbox > flowboxchild > button.active {
-    background: alpha(@blue, 0.15);
-    border-color: @blue;
-    color: @blue;
-}
-
-/* ─── Volume widget ──────────────────────────────────────────────────────── */
-
-.widget-volume {
-    background: @surface;
-    border: 1px solid @border;
-    border-radius: 12px;
-    padding: 10px 14px;
-    margin: 4px 0;
-    color: @text;
+    background: linear-gradient(135deg, alpha(@electric, 0.28), alpha(@electric2, 0.22));
+    border-color: @electric;
+    color: @electric;
 }
 
 .widget-volume > box > label {
-    color: @cyan;
+    color: @electric;
     font-weight: bold;
-    font-size: 13px;
-    margin-bottom: 6px;
-}
-
-.widget-volume scale {
-    color: @blue;
-    margin: 4px 0;
+    margin-bottom: 7px;
+    text-shadow: 0 0 8px alpha(@electric, 0.6);
 }
 
 .widget-volume scale trough {
-    background: @surface2;
-    border-radius: 6px;
-    min-height: 6px;
+    background: alpha(@text-muted, 0.16);
+    border-radius: 999px;
+    min-height: 7px;
 }
 
 .widget-volume scale highlight {
-    background: linear-gradient(to right, @blue, @cyan);
-    border-radius: 6px;
+    background: linear-gradient(to right, @electric2, @electric, #7dd3fc);
+    border-radius: 999px;
+    box-shadow: 0 0 12px alpha(@electric, 0.55);
 }
 
 .widget-volume scale slider {
-    background: @cyan;
-    border-radius: 50%;
-    min-width: 16px;
-    min-height: 16px;
+    background: @electric;
+    border-radius: 999px;
+    min-width: 17px;
+    min-height: 17px;
+    box-shadow: 0 0 16px alpha(@electric, 0.9);
 }
 
-/* Per-app volume */
 .per-app-volume {
-    background: @surface2;
-    border-radius: 8px;
-    padding: 6px 10px;
-    margin: 3px 0;
+    background: alpha(@electric2, 0.08);
+    border-radius: 12px;
+    padding: 7px 10px;
+    margin: 4px 0;
 }
 
 .per-app-volume label {
@@ -178,131 +181,136 @@
     font-size: 12px;
 }
 
-/* ─── Notificaciones ─────────────────────────────────────────────────────── */
+/* ─── Notificaciones flotantes ───────────────────────────────────────────── */
+
+.floating-notifications {
+    background: transparent;
+}
 
 .notification-row {
-    margin: 4px 0;
+    margin: 8px 10px;
 }
 
 .notification {
-    background: @surface;
-    border: 1px solid @border;
-    border-radius: 12px;
-    padding: 12px;
-    margin: 3px 0;
+    background:
+        linear-gradient(135deg, alpha(@electric, 0.18), alpha(@electric2, 0.12) 42%, alpha(@bg, 0.95) 100%);
+    border: 1px solid alpha(@electric, 0.48);
+    border-left: 4px solid @electric;
+    border-radius: 20px;
+    padding: 14px;
+    margin: 4px 0;
     color: @text;
+    box-shadow:
+        0 0 0 1px alpha(@electric, 0.13) inset,
+        0 0 24px alpha(@electric, 0.30),
+        0 14px 34px alpha(black, 0.72);
+}
+
+.floating-notifications > .notification-row > .notification {
+    margin-top: 12px;
+    margin-right: 12px;
+    box-shadow:
+        0 0 0 1px alpha(@electric, 0.16) inset,
+        0 0 32px alpha(@electric, 0.38),
+        0 18px 44px alpha(black, 0.78);
 }
 
 .notification:hover {
-    background: #1c2128;
-    border-color: @blue;
+    background:
+        linear-gradient(135deg, alpha(@electric, 0.26), alpha(@electric2, 0.18) 48%, alpha(@bg, 0.98) 100%);
+    border-color: @electric;
+    box-shadow:
+        0 0 0 1px alpha(@electric, 0.25) inset,
+        0 0 38px alpha(@electric, 0.55),
+        0 20px 54px alpha(black, 0.80);
 }
 
 .notification.low {
-    border-left: 3px solid @green;
+    border-left-color: @green;
 }
 
 .notification.normal {
-    border-left: 3px solid @blue;
+    border-left-color: @electric;
 }
 
 .notification.critical {
-    border-left: 3px solid @red;
-    background: alpha(@red, 0.05);
+    border-left-color: @red;
+    background: linear-gradient(135deg, alpha(@red, 0.22), alpha(@bg, 0.96));
+    box-shadow: 0 0 34px alpha(@red, 0.42), 0 18px 44px alpha(black, 0.76);
 }
 
 .notification-default-action {
     background: transparent;
-    border-radius: 10px;
+    border-radius: 18px;
     padding: 0;
     margin: 0;
     color: @text;
 }
 
-.notification-action {
-    background: @surface2;
-    border: 1px solid @border;
-    border-radius: 8px;
-    color: @blue;
-    padding: 4px 10px;
-    margin: 2px;
-    font-size: 12px;
-}
-
-.notification-action:hover {
-    background: @border;
-}
-
 .close-button {
-    background: @surface2;
+    background: alpha(@red, 0.10);
     color: @text-muted;
-    border-radius: 50%;
-    min-width: 22px;
-    min-height: 22px;
+    border: 1px solid alpha(@red, 0.35);
+    border-radius: 999px;
+    min-width: 24px;
+    min-height: 24px;
     padding: 0;
     font-size: 12px;
+    box-shadow: 0 0 12px alpha(@red, 0.18);
 }
 
 .close-button:hover {
-    background: alpha(@red, 0.2);
-    color: @red;
+    background: @red;
+    color: white;
+    border-color: @red;
+    box-shadow: 0 0 22px alpha(@red, 0.75);
 }
 
 .summary {
-    font-weight: bold;
+    font-weight: 800;
     color: @text;
-    font-size: 13px;
+    font-size: 14px;
+    text-shadow: 0 0 12px alpha(@electric, 0.65);
 }
 
 .time {
-    color: @text-muted;
+    color: alpha(@electric, 0.80);
     font-size: 11px;
 }
 
 .body {
     color: @text-muted;
     font-size: 12px;
+    line-height: 1.35;
 }
 
 /* ─── Estado vacío ───────────────────────────────────────────────────────── */
 
-.blank-window {
-    background: transparent;
-}
-
+.blank-window,
 .widget-notifications {
     background: transparent;
     padding: 0;
 }
 
 .empty-state-icon {
-    color: @border;
+    color: alpha(@electric, 0.32);
     font-size: 48px;
 }
 
 .empty-state-text {
-    color: @border;
+    color: @text-muted;
     font-size: 13px;
 }
 
 /* ─── Scrollbar ──────────────────────────────────────────────────────────── */
 
 scrollbar slider {
-    background: @border;
-    border-radius: 8px;
-    min-width: 4px;
+    background: alpha(@electric, 0.36);
+    border-radius: 999px;
+    min-width: 5px;
 }
 
 scrollbar slider:hover {
-    background: @blue;
-}
-
-/* ─── Popup flotante ─────────────────────────────────────────────────────── */
-
-.floating-notifications {
-    background: transparent;
-}
-
-.floating-notifications > .notification-row > .notification {
-    box-shadow: 0 4px 16px alpha(black, 0.5);
+    background: @electric;
+    box-shadow: 0 0 12px alpha(@electric, 0.75);
 }

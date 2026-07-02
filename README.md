@@ -45,29 +45,16 @@ Instala la base mínima y drivers:
 
 ### Install desktop / bar
 
-Permite elegir componentes de escritorio/barra:
+Permite elegir componentes de escritorio:
 
 - Hyprland
-- MangoWM
-- Waybar
-- Noctalia Shell
-- TTY session profiles: asocia cada TTY con un escritorio y una barra sin mezclar configs
 - swaync
 - wlogout
 - Rofi
 - Kitty
 - GNOME Keyring o KeePassXC
 
-Los perfiles TTY instalan un bloque gestionado en `~/.zprofile`, scripts en `~/.local/bin/` y un archivo editable en `~/.config/init-install/tty-profiles.conf`. Por ejemplo:
-
-```bash
-TTY1_DESKTOP=hyprland
-TTY1_BAR=waybar
-TTY3_DESKTOP=mango
-TTY3_BAR=noctalia
-```
-
-Hyprland y Mango solo llaman a `init-install-autostart`; la barra real se decide desde el perfil del TTY.
+Hyprland queda como único compositor gestionado por este dot installer. Los wallpapers se gestionan con Hyprpaper usando `~/.config/wallpapers` en orden aleatorio cada 15 minutos.
 
 ### Install software
 
@@ -109,10 +96,7 @@ Se ignoran carpetas ruidosas o peligrosas durante sync, como `.git`, `node_modul
 
 ## Configs incluidas
 
-- Hyprland: `hyprland/configs/`
-- MangoWM: `mango/configs/`
-- Noctalia Shell: `noctalia/configs/`
-- Waybar: `waybar/configs/`
+- Hyprland/Hyprpaper: `hyprland/configs/`
 - Kitty: `kitty/configs/`
 - Rofi: `rofi/configs/`
 - swaync: `swaync/configs/`

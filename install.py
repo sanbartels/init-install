@@ -183,11 +183,7 @@ DESKTOP_SECTION = Section(
     "Install desktop / bar",
     "Entornos gráficos, shell/barra y componentes visuales",
     (
-        Category("hyprland", "Hyprland", "Instala Hyprland y dependencias de sesión", "Paquetes y acciones del módulo hyprland.", scripts("hyprland/install_hyprland.sh")),
-        Category("mango", "MangoWM", "Instala MangoWM desde AUR", package_text("mangowm-git"), scripts("mango/install_mango.sh")),
-        Category("waybar", "Waybar", "Instala Waybar", package_text("waybar", "python-gobject"), scripts("waybar/install_waybar.sh")),
-        Category("noctalia", "Noctalia Shell", "Instala Noctalia Shell desde AUR", package_text("noctalia-shell"), scripts("noctalia/install_noctalia.sh")),
-        Category("session_profiles", "TTY session profiles", "Asocia cada TTY con un escritorio y una barra", "Configura ~/.zprofile, ~/.local/bin/init-install-session y ~/.config/init-install/tty-profiles.conf.", scripts("session/install_session_profiles.sh")),
+        Category("hyprland", "Hyprland", "Instala Hyprland y dependencias", "Paquetes y acciones del módulo hyprland.", scripts("hyprland/install_hyprland.sh")),
         Category("swaync", "swaync", "Centro de notificaciones", package_text("swaync", "python-gobject"), scripts("swaync/install_swaync.sh")),
         Category("wlogout", "wlogout", "Menú de apagado/logout", package_text("wlogout"), scripts("wlogout/install_wlogout.sh")),
         Category("rofi", "Rofi", "Launcher y applets", package_text("rofi"), scripts("rofi/install_rofi.sh")),

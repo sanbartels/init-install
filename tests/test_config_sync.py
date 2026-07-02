@@ -9,15 +9,15 @@ class ConfigSyncTests(unittest.TestCase):
     def test_identical_directories_are_skipped_without_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / "repo" / "waybar"
-            dest = root / "home" / "waybar"
+            source = root / "repo" / "hyprland"
+            dest = root / "home" / "hyprland"
             backup_root = root / "backups"
             source.mkdir(parents=True)
             dest.mkdir(parents=True)
             (source / "config.jsonc").write_text("same", encoding="utf-8")
             (dest / "config.jsonc").write_text("same", encoding="utf-8")
 
-            plan = compare_paths("waybar", source, dest)
+            plan = compare_paths("hyprland", source, dest)
             self.assertEqual(plan.status, "identical")
             result = apply_sync_plan(plan, backup_root=backup_root, confirmed=True, timestamp="2026-01-02_030405")
 
@@ -28,13 +28,13 @@ class ConfigSyncTests(unittest.TestCase):
     def test_missing_destination_is_copied_without_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / "repo" / "mango"
-            dest = root / "home" / "mango"
+            source = root / "repo" / "rofi"
+            dest = root / "home" / "rofi"
             backup_root = root / "backups"
             source.mkdir(parents=True)
             (source / "config.conf").write_text("repo", encoding="utf-8")
 
-            plan = compare_paths("mango", source, dest)
+            plan = compare_paths("rofi", source, dest)
             self.assertEqual(plan.status, "missing_destination")
             result = apply_sync_plan(plan, backup_root=backup_root, confirmed=True, timestamp="2026-01-02_030405")
 
@@ -64,8 +64,8 @@ class ConfigSyncTests(unittest.TestCase):
     def test_different_destination_is_backed_up_then_replaced_exactly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / "repo" / "noctalia"
-            dest = root / "home" / "noctalia"
+            source = root / "repo" / "swaync"
+            dest = root / "home" / "swaync"
             backup_root = root / "backups"
             source.mkdir(parents=True)
             dest.mkdir(parents=True)
@@ -73,7 +73,7 @@ class ConfigSyncTests(unittest.TestCase):
             (dest / "settings.json").write_text('{"theme":"local"}', encoding="utf-8")
             (dest / "local-only.json").write_text("remove from destination", encoding="utf-8")
 
-            plan = compare_paths("noctalia", source, dest)
+            plan = compare_paths("swaync", source, dest)
             self.assertEqual(plan.status, "different")
             self.assertEqual(plan.changed_count, 1)
             self.assertEqual(plan.removed_count, 1)
@@ -90,10 +90,10 @@ class ConfigSyncTests(unittest.TestCase):
     def test_config_target_resolves_repo_and_home_paths(self):
         root = Path("/repo")
         home = Path("/home/user")
-        target = ConfigTarget("mango", "Mango", "mango/configs", ".config/mango")
+        target = ConfigTarget("rofi", "Rofi", "rofi/configs", ".config/rofi")
 
-        self.assertEqual(target.repo_path(root), Path("/repo/mango/configs"))
-        self.assertEqual(target.home_path(home), Path("/home/user/.config/mango"))
+        self.assertEqual(target.repo_path(root), Path("/repo/rofi/configs"))
+        self.assertEqual(target.home_path(home), Path("/home/user/.config/rofi"))
 
 
 if __name__ == "__main__":

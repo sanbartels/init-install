@@ -19,4 +19,3 @@ mkdir -p "$DST_DIR"
 cp -an "$SRC_DIR/." "$DST_DIR/"
 
 print_info "Configuración base de Hyprland copiada en $DST_DIR"
-print_info "Para asociar Hyprland a un TTY, ejecuta el módulo 'TTY session profiles'."
