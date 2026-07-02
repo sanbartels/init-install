@@ -28,10 +28,7 @@ CONFIG_FILE = Path.home() / ".init-install.conf"
 IMPORT_BACKUP_ROOT = Path.home() / ".config_backups" / "init-install"
 EXPORT_BACKUP_ROOT = SCRIPT_DIR / ".config_backups" / "exports"
 
-MUTUAL_EXCLUSIONS: dict[str, list[str]] = {
-    "keyring": ["keepassxc"],
-    "keepassxc": ["keyring"],
-}
+MUTUAL_EXCLUSIONS: dict[str, list[str]] = {}
 
 
 @dataclass(frozen=True)
@@ -185,11 +182,9 @@ DESKTOP_SECTION = Section(
     (
         Category("hyprland", "Hyprland", "Instala Hyprland y dependencias", "Paquetes y acciones del módulo hyprland.", scripts("hyprland/install_hyprland.sh")),
         Category("swaync", "swaync", "Centro de notificaciones", package_text("swaync", "python-gobject"), scripts("swaync/install_swaync.sh")),
-        Category("wlogout", "wlogout", "Menú de apagado/logout", package_text("wlogout"), scripts("wlogout/install_wlogout.sh")),
         Category("rofi", "Rofi", "Launcher y applets", package_text("rofi"), scripts("rofi/install_rofi.sh")),
         Category("kitty", "Kitty", "Terminal Kitty", package_text("kitty"), scripts("kitty/install_kitty.sh")),
         Category("keyring", "GNOME Keyring", "Keyring, libsecret y agente SSH", package_text("gnome-keyring", "libsecret", "seahorse", "gcr-4"), scripts("keyring/install_keyring.sh", "keyring/configure_keyring.sh")),
-        Category("keepassxc", "KeePassXC", "Alternativa a GNOME Keyring", package_text("keepassxc", "libsecret"), scripts("keepassxc/install_keepassxc.sh")),
     ),
 )
 
@@ -215,7 +210,7 @@ SOFTWARE_SECTION = Section(
         Category("printing_sharing", "Printing / sharing", "Impresión, Samba y mDNS", package_text("cups", "cups-pdf", "cups-pk-helper", "gutenprint", "system-config-printer", "samba", "nss-mdns", "ghostscript", "gsfonts"), internal_runner=install_pacman_packages("Printing / sharing", ["cups", "cups-pdf", "cups-pk-helper", "gutenprint", "system-config-printer", "samba", "nss-mdns", "ghostscript", "gsfonts"])),
         Category("network_tools", "Network tools", "Utilidades de red", package_text("net-tools", "nmap", "rsync"), internal_runner=install_pacman_packages("Network tools", ["net-tools", "nmap", "rsync"])),
         Category("tts_tools", "TTS tools", "Piper/espeak para texto a voz", package_text("espeak-ng", "piper-tts", "piper-voices-es-ar"), internal_runner=install_yay_packages("TTS tools", ["espeak-ng", "piper-tts", "piper-voices-es-ar"])),
-        Category("homebrew", "Homebrew", "Instala Homebrew global y de usuario", "Instala Homebrew y shellenv.", scripts("homebrew/install_homebrew.sh")),
+        Category("homebrew", "Homebrew", "Instala Homebrew", "Ejecuta el instalador oficial de Homebrew.", scripts("homebrew/install_homebrew.sh")),
         Category("docker", "Docker", "Docker y docker-compose", package_text("docker", "docker-compose"), scripts("docker/install_docker.sh")),
         Category("nvim", "Neovim", "Neovim desde pacman y dependencias", "Instalador completo del módulo nvim.", scripts("nvim/install.sh")),
         Category("yazi", "Yazi", "File manager Yazi", "Instalador completo del módulo yazi.", scripts("yazi/install_yazi.sh")),

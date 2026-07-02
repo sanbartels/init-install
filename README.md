@@ -49,10 +49,9 @@ Permite elegir componentes de escritorio:
 
 - Hyprland
 - swaync
-- wlogout
 - Rofi
 - Kitty
-- GNOME Keyring o KeePassXC
+- GNOME Keyring
 
 Hyprland queda como único compositor gestionado por este dot installer. Los wallpapers se gestionan con Hyprpaper usando `~/.config/wallpapers` en orden aleatorio cada 15 minutos.
 
@@ -100,7 +99,6 @@ Se ignoran carpetas ruidosas o peligrosas durante sync, como `.git`, `node_modul
 - Kitty: `kitty/configs/`
 - Rofi: `rofi/configs/`
 - swaync: `swaync/configs/`
-- wlogout: `wlogout/configs/`
 - Neovim: `nvim/configs/`
 - Yazi: `yazi/configs/`
 

@@ -25,4 +25,4 @@ sudo pacman -S --needed --noconfirm \
     python-gobject \
     zoxide
 
-print_info "Utilidades esenciales listas. wlogout se elige desde Desktop/Bar."
+print_info "Utilidades esenciales listas."
