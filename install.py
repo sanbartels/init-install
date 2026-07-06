@@ -39,6 +39,7 @@ class Category:
     packages: str
     scripts: tuple[str, ...] = ()
     internal_runner: Callable[[], list[str]] | None = None
+    install_detector: Callable[[], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,51 @@ def scripts(*relative_paths: str) -> tuple[str, ...]:
     return tuple(str(SCRIPT_DIR / path) for path in relative_paths)
 
 
+def command_exists(command: str) -> bool:
+    return shutil.which(command) is not None
+
+
+def pacman_package_installed(package: str) -> bool:
+    if shutil.which("pacman") is None:
+        return False
+    result = subprocess.run(
+        ["pacman", "-Qi", package],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def package_names_from_description(description: str) -> tuple[str, ...]:
+    return tuple(
+        line.removeprefix("- ").strip()
+        for line in description.splitlines()
+        if line.startswith("- ") and line.removeprefix("- ").strip()
+    )
+
+
+def category_is_installed(category: Category) -> bool:
+    if category.install_detector is not None:
+        return category.install_detector()
+    packages = package_names_from_description(category.packages)
+    return bool(packages) and all(pacman_package_installed(package) for package in packages)
+
+
+def installed_category_menu_state(categories: tuple[Category, ...]) -> tuple[set[str], dict[str, str]]:
+    disabled_keys = {category.key for category in categories if category_is_installed(category)}
+    badges = {key: "(installed)" for key in disabled_keys}
+    return disabled_keys, badges
+
+
+def sync_category_badges(direction: str, states: Iterable) -> dict[str, str]:
+    return {
+        f"config_{direction}_{state.target.key}": "(sync)"
+        for state in states
+        if state.default_selected
+    }
+
+
 BASE_SECTION = Section(
     "base",
     "Install base",
@@ -149,6 +195,7 @@ BASE_SECTION = Section(
             "Instala yay si no existe, sin instalar software extra",
             "Acciones:\n- clona yay desde AUR si falta\n- makepkg -si --noconfirm",
             scripts("yay_install/install_yay_packages.sh"),
+            install_detector=lambda: command_exists("yay"),
         ),
         Category(
             "drivers_utilities",
@@ -180,7 +227,7 @@ DESKTOP_SECTION = Section(
     "Install desktop / bar",
     "Entornos gráficos, shell/barra y componentes visuales",
     (
-        Category("hyprland", "Hyprland", "Instala Hyprland y dependencias", "Paquetes y acciones del módulo hyprland.", scripts("hyprland/install_hyprland.sh")),
+        Category("hyprland", "Hyprland", "Instala Hyprland y dependencias", "Paquetes y acciones del módulo hyprland.", scripts("hyprland/install_hyprland.sh"), install_detector=lambda: command_exists("Hyprland") or command_exists("hyprland")),
         Category("eww", "eww", "Widget system para escritorio", package_text("eww"), internal_runner=install_yay_packages("eww", ["eww"])),
         Category("swaync", "swaync", "Centro de notificaciones", package_text("swaync", "python-gobject"), scripts("swaync/install_swaync.sh")),
         Category("rofi", "Rofi", "Launcher y applets", package_text("rofi"), scripts("rofi/install_rofi.sh")),
@@ -197,7 +244,7 @@ SOFTWARE_SECTION = Section(
     (
         Category("firefox", "Firefox", "Navegador Firefox", package_text("firefox"), internal_runner=install_pacman_packages("Firefox", ["firefox"])),
         Category("google_chrome", "Google Chrome", "Navegador Google Chrome desde AUR", package_text("google-chrome"), internal_runner=install_yay_packages("Google Chrome", ["google-chrome"])),
-        Category("discord", "Discord", "Cliente Discord con soporte de compartir pantalla", "Instala Discord, PipeWire, portales XDG y configura el launcher con flags WebRTC.", scripts("discord/install_discord.sh")),
+        Category("discord", "Discord", "Cliente Discord con soporte de compartir pantalla", "Instala Discord, PipeWire, portales XDG y configura el launcher con flags WebRTC.", scripts("discord/install_discord.sh"), install_detector=lambda: command_exists("discord")),
         Category("obsidian", "Obsidian", "Notas Markdown", package_text("obsidian"), internal_runner=install_pacman_packages("Obsidian", ["obsidian"])),
         Category("onlyoffice", "OnlyOffice", "Suite ofimática desde AUR", package_text("onlyoffice-bin"), internal_runner=install_yay_packages("OnlyOffice", ["onlyoffice-bin"])),
         Category("media_tools", "Multimedia", "Reproductor, imágenes y descargas", package_text("mpv", "gimp", "yt-dlp", "ffmpeg"), internal_runner=install_pacman_packages("Multimedia", ["mpv", "gimp", "yt-dlp", "ffmpeg"])),
@@ -212,18 +259,18 @@ SOFTWARE_SECTION = Section(
         Category("printing_sharing", "Printing / sharing", "Impresión, Samba y mDNS", package_text("cups", "cups-pdf", "cups-pk-helper", "gutenprint", "system-config-printer", "samba", "nss-mdns", "ghostscript", "gsfonts"), internal_runner=install_pacman_packages("Printing / sharing", ["cups", "cups-pdf", "cups-pk-helper", "gutenprint", "system-config-printer", "samba", "nss-mdns", "ghostscript", "gsfonts"])),
         Category("network_tools", "Network tools", "Utilidades de red", package_text("net-tools", "nmap", "rsync"), internal_runner=install_pacman_packages("Network tools", ["net-tools", "nmap", "rsync"])),
         Category("tts_tools", "TTS tools", "Piper/espeak para texto a voz", package_text("espeak-ng", "piper-tts", "piper-voices-es-ar"), internal_runner=install_yay_packages("TTS tools", ["espeak-ng", "piper-tts", "piper-voices-es-ar"])),
-        Category("homebrew", "Homebrew", "Instala Homebrew", "Ejecuta el instalador oficial de Homebrew.", scripts("homebrew/install_homebrew.sh")),
+        Category("homebrew", "Homebrew", "Instala Homebrew", "Ejecuta el instalador oficial de Homebrew.", scripts("homebrew/install_homebrew.sh"), install_detector=lambda: Path.home().joinpath(".linuxbrew/bin/brew").exists() or Path("/home/linuxbrew/.linuxbrew/bin/brew").exists()),
         Category("docker", "Docker", "Docker y docker-compose", package_text("docker", "docker-compose"), scripts("docker/install_docker.sh")),
-        Category("nvim", "Neovim", "Neovim desde pacman y dependencias", "Instalador completo del módulo nvim.", scripts("nvim/install.sh")),
-        Category("yazi", "Yazi", "File manager Yazi", "Instalador completo del módulo yazi.", scripts("yazi/install_yazi.sh")),
-        Category("mongodb_compass", "MongoDB Compass", "GUI oficial MongoDB", "Descarga release oficial e instala en /opt.", scripts("mongodb_compass/install_compass.sh")),
-        Category("opencode", "Opencode", "Opencode CLI", "Instalador oficial de Opencode sin configuración.", scripts("opencode/install_opencode.sh")),
-        Category("pi", "Pi Coding Agent", "Instala Pi, clona j0k3r-pi en ~/.pi/agent e instala subagents", "Acciones:\n- curl -fsSL https://pi.dev/install.sh | sh\n- clona/actualiza j0k3r-pi en ~/.pi/agent\n- pi install npm:pi-subagents-j0k3r", scripts("pi/install_pi.sh")),
-        Category("claude_code", "Claude Code", "Claude Code CLI", "Instalador oficial de Claude Code.", scripts("claude_code/install_claude_code.sh")),
-        Category("codex", "Codex", "Codex CLI via Homebrew", "Requiere Homebrew.", scripts("codex/install_codex.sh")),
-        Category("intellij", "IntelliJ IDEA", "IntelliJ IDEA Ultimate oficial", "Descarga desde API oficial JetBrains.", scripts("intellij/install_intellij.sh")),
+        Category("nvim", "Neovim", "Neovim desde pacman y dependencias", "Instalador completo del módulo nvim.", scripts("nvim/install.sh"), install_detector=lambda: command_exists("nvim")),
+        Category("yazi", "Yazi", "File manager Yazi", "Instalador completo del módulo yazi.", scripts("yazi/install_yazi.sh"), install_detector=lambda: command_exists("yazi")),
+        Category("mongodb_compass", "MongoDB Compass", "GUI oficial MongoDB", "Descarga release oficial e instala en /opt.", scripts("mongodb_compass/install_compass.sh"), install_detector=lambda: Path("/opt/mongo/mongoDBCompass/MongoDB Compass").is_file()),
+        Category("opencode", "Opencode", "Opencode CLI", "Instalador oficial de Opencode sin configuración.", scripts("opencode/install_opencode.sh"), install_detector=lambda: command_exists("opencode")),
+        Category("pi", "Pi Coding Agent", "Instala Pi, clona j0k3r-pi en ~/.pi/agent e instala subagents", "Acciones:\n- curl -fsSL https://pi.dev/install.sh | sh\n- clona/actualiza j0k3r-pi en ~/.pi/agent\n- pi install npm:pi-subagents-j0k3r", scripts("pi/install_pi.sh"), install_detector=lambda: command_exists("pi")),
+        Category("claude_code", "Claude Code", "Claude Code CLI", "Instalador oficial de Claude Code.", scripts("claude_code/install_claude_code.sh"), install_detector=lambda: command_exists("claude")),
+        Category("codex", "Codex", "Codex CLI via Homebrew", "Requiere Homebrew.", scripts("codex/install_codex.sh"), install_detector=lambda: command_exists("codex")),
+        Category("intellij", "IntelliJ IDEA", "IntelliJ IDEA Ultimate oficial", "Descarga desde API oficial JetBrains.", scripts("intellij/install_intellij.sh"), install_detector=lambda: command_exists("idea") or Path("/opt/intellij").exists()),
         Category("ssh", "SSH", "Instala OpenSSH", package_text("openssh"), scripts("ssh/install_ssh.sh")),
-        Category("zsh", "Zsh", "Instala Zsh, Oh My Zsh, plugins y aliases", "Acciones:\n- instala zsh, git y eza\n- clona/actualiza Oh My Zsh\n- clona/actualiza zsh-autosuggestions, zsh-syntax-highlighting y zsh-completions\n- activa plugins y aliases en ~/.zshrc con backup y bloque gestionado", scripts("zsh/install_zsh.sh")),
+        Category("zsh", "Zsh", "Instala Zsh, Oh My Zsh, plugins y aliases", "Acciones:\n- instala zsh, git y eza\n- clona/actualiza Oh My Zsh\n- clona/actualiza zsh-autosuggestions, zsh-syntax-highlighting y zsh-completions\n- activa plugins y aliases en ~/.zshrc con backup y bloque gestionado", scripts("zsh/install_zsh.sh"), install_detector=lambda: command_exists("zsh")),
     ),
 )
 
@@ -334,16 +381,36 @@ class InstallerApp:
         self.run_category_section(SOFTWARE_SECTION)
 
     def run_category_section(self, section: Section) -> None:
-        selected = self.choose_categories(section.categories, section.title, section.default_selected)
+        disabled_keys, badges = installed_category_menu_state(section.categories)
+        selected = self.choose_categories(
+            section.categories,
+            section.title,
+            section.default_selected,
+            disabled_keys=disabled_keys,
+            badges=badges,
+        )
         if selected:
             self.run_installation(selected)
 
-    def choose_categories(self, categories: tuple[Category, ...], title: str, default_selected: bool) -> list[Category]:
+    def choose_categories(
+        self,
+        categories: tuple[Category, ...],
+        title: str,
+        default_selected: bool,
+        *,
+        disabled_keys: set[str] | None = None,
+        badges: dict[str, str] | None = None,
+    ) -> list[Category]:
+        disabled_keys = disabled_keys or set()
+        badges = badges or {}
         current_index = 0
         top_index = 0
         number_buffer = ""
         for category in categories:
-            self.selections.setdefault(category.key, default_selected)
+            if category.key in disabled_keys:
+                self.selections[category.key] = False
+            else:
+                self.selections.setdefault(category.key, default_selected)
         self.save_selections()
 
         while True:
@@ -362,9 +429,13 @@ class InstallerApp:
 
             for row, index in enumerate(range(top_index, min(len(categories), top_index + list_height))):
                 category = categories[index]
+                disabled = category.key in disabled_keys
                 marker = "[x]" if self.selections.get(category.key, False) else "[ ]"
+                badge = f" {badges[category.key]}" if category.key in badges else ""
                 attr = curses.A_REVERSE if index == current_index else curses.A_NORMAL
-                self.add_line(4 + row, 0, f"{index + 1:>2}. {marker} {category.title}", attr)
+                if disabled:
+                    attr |= curses.A_DIM
+                self.add_line(4 + row, 0, f"{index + 1:>2}. {marker} {category.title}{badge}", attr)
                 self.add_line(4 + row, 34, category.summary, attr)
 
             self.add_line(height - 2, 0, "A: Ejecutar  T: Toggle All  V: Ver  Q: Volver", curses.A_BOLD)
@@ -394,22 +465,37 @@ class InstallerApp:
                     number_buffer = ""
                     if 1 <= number <= len(categories):
                         current_index = number - 1
-                        self.toggle_category(categories[current_index])
+                        category = categories[current_index]
+                        if category.key in disabled_keys:
+                            self.message = f"Ya instalado: {category.title}"
+                        else:
+                            self.toggle_category(category)
                     else:
                         self.message = "Número fuera de rango"
                 else:
-                    self.toggle_category(categories[current_index])
+                    category = categories[current_index]
+                    if category.key in disabled_keys:
+                        self.message = f"Ya instalado: {category.title}"
+                    else:
+                        self.toggle_category(category)
             elif key in (ord("t"), ord("T")):
-                enable_all = not all(self.selections.get(category.key, False) for category in categories)
-                for category in categories:
+                selectable = [category for category in categories if category.key not in disabled_keys]
+                if not selectable:
+                    self.message = "Nada disponible para seleccionar"
+                    continue
+                enable_all = not all(self.selections.get(category.key, False) for category in selectable)
+                for category in selectable:
                     self.selections[category.key] = enable_all
+                for category in categories:
+                    if category.key in disabled_keys:
+                        self.selections[category.key] = False
                 self.save_selections()
-                self.message = "Todo activado" if enable_all else "Todo desactivado"
+                self.message = "Todo disponible activado" if enable_all else "Todo desactivado"
             elif key in (ord("v"), ord("V")):
                 self.view_category(categories[current_index])
             elif key in (ord("a"), ord("A")):
                 number_buffer = ""
-                selected = [category for category in categories if self.selections.get(category.key, False)]
+                selected = [category for category in categories if self.selections.get(category.key, False) and category.key not in disabled_keys]
                 if not selected:
                     self.message = "Nada seleccionado"
                 else:
@@ -556,7 +642,12 @@ class InstallerApp:
         for state in states:
             self.selections[f"config_{direction}_{state.target.key}"] = state.default_selected
         self.save_selections()
-        selected_items = self.choose_categories(categories, title, default_selected=False)
+        selected_items = self.choose_categories(
+            categories,
+            title,
+            default_selected=False,
+            badges=sync_category_badges(direction, states),
+        )
         if not selected_items:
             return
         selected_keys = {item.key.removeprefix(f"config_{direction}_") for item in selected_items}
