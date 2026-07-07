@@ -35,6 +35,7 @@ Instala la base mínima y drivers:
 
 - sistema base
 - yay como helper AUR
+- Tailscale para acceso remoto privado
 - red
 - audio PipeWire
 - códecs
@@ -113,8 +114,8 @@ Después de la instalación, estos comandos pueden quedar disponibles en `~/.loc
 ## Validación de desarrollo
 
 ```bash
-python -m unittest discover -s tests
-python -m py_compile install.py installer_lib/*.py
+python3 -m unittest discover -s tests
+python3 -m py_compile install.py installer_lib/*.py
 bash -n $(find . -name "*.sh" -not -path "./.git/*")
 ```
 

@@ -198,6 +198,14 @@ BASE_SECTION = Section(
             install_detector=lambda: command_exists("yay"),
         ),
         Category(
+            "tailscale",
+            "Tailscale",
+            "Instala Tailscale, habilita tailscaled y deja listo tailscale up --ssh",
+            package_text("tailscale"),
+            scripts("tailscale/install_tailscale.sh"),
+            install_detector=lambda: command_exists("tailscale"),
+        ),
+        Category(
             "drivers_utilities",
             "Drivers y utilidades base",
             "Red, audio, códecs, microcódigo, GPU y TRIM",
@@ -356,7 +364,7 @@ class InstallerApp:
             elif key in (curses.KEY_DOWN, ord("j")):
                 current_index = min(len(MAIN_ACTIONS) - 1, current_index + 1)
             elif ord("1") <= key <= ord(str(len(MAIN_ACTIONS))):
-                current_index = int(chr(key)) - 1
+                current_index = key - ord("1")
                 if self.dispatch_action(MAIN_ACTIONS[current_index]):
                     return
             elif key in (curses.KEY_ENTER, 10, 13):
@@ -461,7 +469,12 @@ class InstallerApp:
                 self.message = "Presioná Enter para alternar esa entrada"
             elif key in (ord(" "), curses.KEY_ENTER, 10, 13):
                 if number_buffer:
-                    number = int(number_buffer)
+                    try:
+                        number = int(number_buffer)
+                    except ValueError:
+                        number_buffer = ""
+                        self.message = "Número inválido"
+                        continue
                     number_buffer = ""
                     if 1 <= number <= len(categories):
                         current_index = number - 1
@@ -542,9 +555,9 @@ class InstallerApp:
     def draw_install_screen(self, current: int, total: int, category_title: str, logs: list[str]) -> None:
         self.stdscr.erase()
         height, width = self.stdscr.getmaxyx()
-        percent = int((current / total) * 100) if total else 100
+        percent = (current * 100) // total if total else 100
         bar_width = max(10, min(width - 12, 50))
-        filled = int((percent / 100) * bar_width)
+        filled = (percent * bar_width) // 100
         bar = "[" + "#" * filled + "-" * (bar_width - filled) + "]"
         self.add_line(0, 0, "Ejecutando selección", curses.A_BOLD)
         self.add_line(1, 0, f"[{current}/{total}] {category_title}")
