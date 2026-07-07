@@ -52,9 +52,13 @@ Permite elegir componentes de escritorio:
 - swaync
 - Rofi
 - Kitty
+- Sunshine para acceso remoto con Moonlight sobre Tailscale
+- wayvnc como fallback VNC para Wayland
 - GNOME Keyring
 
 Hyprland queda como único compositor gestionado por este dot installer. Los wallpapers se gestionan con Hyprpaper usando `~/.config/wallpapers` en orden aleatorio cada 15 minutos.
+
+Para escritorio remoto, la opción recomendada es Sunshine en el VPS y Moonlight en Mac/iPhone, conectando por IP Tailscale o MagicDNS. `wayvnc` queda disponible como fallback más simple.
 
 ### Install software
 

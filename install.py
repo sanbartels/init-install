@@ -241,6 +241,8 @@ DESKTOP_SECTION = Section(
         Category("rofi", "Rofi", "Launcher y applets", package_text("rofi"), scripts("rofi/install_rofi.sh")),
         Category("kitty", "Kitty", "Terminal Kitty", package_text("kitty"), scripts("kitty/install_kitty.sh")),
         Category("ghostty", "Ghostty", "Terminal Ghostty", package_text("ghostty"), internal_runner=install_pacman_packages("Ghostty", ["ghostty"])),
+        Category("sunshine", "Sunshine", "Streaming remoto de escritorio para Moonlight", "Instala Sunshine desde AUR para acceder desde Moonlight en Mac/iPhone sobre Tailscale.", scripts("remote_desktop/install_sunshine.sh"), install_detector=lambda: command_exists("sunshine")),
+        Category("wayvnc", "wayvnc", "Fallback VNC para escritorios Wayland/wlroots", package_text("wayvnc"), scripts("remote_desktop/install_wayvnc.sh"), install_detector=lambda: command_exists("wayvnc")),
         Category("keyring", "GNOME Keyring", "Keyring, libsecret y agente SSH", package_text("gnome-keyring", "libsecret", "seahorse", "gcr-4"), scripts("keyring/install_keyring.sh", "keyring/configure_keyring.sh")),
     ),
 )
