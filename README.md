@@ -95,7 +95,7 @@ Para escritorio remoto, la opción recomendada es Sunshine en el VPS y Moonlight
 
 ### Install software
 
-Lista programas de uso común y solo instala lo seleccionado. Incluye navegadores, Discord con dependencias de compartir pantalla en Wayland, dev tools, terminal tools, multimedia, fuentes, Docker, Neovim, Yazi, MongoDB Compass, Opencode, Claude Code, Codex, IntelliJ, SSH y Zsh con Oh My Zsh/plugins/aliases activados mediante bloque gestionado en `~/.zshrc`.
+Lista programas de uso común y solo instala lo seleccionado. Incluye navegadores, Discord con dependencias de compartir pantalla en Wayland, dev tools, terminal tools, multimedia, fuentes, Docker, Neovim, Yazi, MongoDB Compass, Opencode, Claude Code, Codex, Antigravity CLI, IntelliJ, SSH y Zsh con Oh My Zsh/plugins/aliases activados mediante bloque gestionado en `~/.zshrc`.
 
 ### Import configs
 
