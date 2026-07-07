@@ -76,6 +76,32 @@ def run_command(command: list[str], *, cwd: Path = SCRIPT_DIR) -> list[str]:
     return lines
 
 
+def start_sudo_keepalive() -> subprocess.Popen:
+    return subprocess.Popen(
+        ["bash", "-c", "while true; do sudo -n -v; sleep 30; done"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def stop_sudo_keepalive(process: subprocess.Popen | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, 15)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, 9)
+        except ProcessLookupError:
+            return
+        process.wait()
+
+
 def install_pacman_packages(label: str, packages: Iterable[str]) -> Callable[[], list[str]]:
     package_list = tuple(packages)
 
@@ -594,31 +620,53 @@ class InstallerApp:
         if return_code != 0:
             raise subprocess.CalledProcessError(return_code, process.args)
 
+    def ensure_sudo_credentials(self) -> None:
+        self.stdscr.erase()
+        self.add_line(0, 0, "Validando sudo antes de instalar...", curses.A_BOLD)
+        self.add_line(2, 0, "Si se solicita contraseña, ingresala en la terminal.")
+        self.stdscr.refresh()
+        curses.def_prog_mode()
+        curses.endwin()
+        try:
+            subprocess.run(["sudo", "-v"], check=True)
+        finally:
+            curses.reset_prog_mode()
+            self.stdscr.refresh()
+
     def run_installation(self, selected: list[Category]) -> None:
         all_logs: list[str] = []
-        for index, category in enumerate(selected, start=1):
-            category_logs = [f"==> {category.title}"]
-            self.draw_install_screen(index, len(selected), category.title, category_logs)
-            try:
-                if category.internal_runner is not None:
-                    category_logs.extend(category.internal_runner())
+        keepalive: subprocess.Popen | None = None
+        try:
+            self.ensure_sudo_credentials()
+            keepalive = start_sudo_keepalive()
+            for index, category in enumerate(selected, start=1):
+                category_logs = [f"==> {category.title}"]
+                self.draw_install_screen(index, len(selected), category.title, category_logs)
+                try:
+                    if category.internal_runner is not None:
+                        category_logs.extend(category.internal_runner())
+                        self.draw_install_screen(index, len(selected), category.title, category_logs)
+                    else:
+                        for script in category.scripts:
+                            self.run_script(script, index, len(selected), category.title, category_logs)
+                    category_logs.append(f"Completado: {category.title}")
+                    all_logs.extend(category_logs)
                     self.draw_install_screen(index, len(selected), category.title, category_logs)
-                else:
-                    for script in category.scripts:
-                        self.run_script(script, index, len(selected), category.title, category_logs)
-                category_logs.append(f"Completado: {category.title}")
-                all_logs.extend(category_logs)
-                self.draw_install_screen(index, len(selected), category.title, category_logs)
-                time.sleep(0.4)
-            except Exception as exc:
-                category_logs.append(f"ERROR: {exc}")
-                all_logs.extend(category_logs)
-                self.draw_install_screen(index, len(selected), category.title, category_logs)
-                self.pause_message("La operación falló", category_logs[-20:])
-                self.message = f"Falló: {category.title}"
-                return
-        self.pause_message("Operación finalizada correctamente", all_logs[-20:] or ["Sin salida"])
-        self.message = "Operación completada"
+                    time.sleep(0.4)
+                except Exception as exc:
+                    category_logs.append(f"ERROR: {exc}")
+                    all_logs.extend(category_logs)
+                    self.draw_install_screen(index, len(selected), category.title, category_logs)
+                    self.pause_message("La operación falló", category_logs[-20:])
+                    self.message = f"Falló: {category.title}"
+                    return
+            self.pause_message("Operación finalizada correctamente", all_logs[-20:] or ["Sin salida"])
+            self.message = "Operación completada"
+        except Exception as exc:
+            self.pause_message("No se pudo validar sudo", [f"ERROR: {exc}"])
+            self.message = "Falló la validación de sudo"
+        finally:
+            stop_sudo_keepalive(keepalive)
 
     def import_configs(self) -> None:
         self.run_config_section("import")
