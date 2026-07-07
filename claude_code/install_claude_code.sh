@@ -12,6 +12,7 @@ die() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
 
 INSTALL_URL="https://claude.ai/install.sh"
 LOCAL_BIN_DIR="$HOME/.local/bin"
+CLAUDE_BIN="$LOCAL_BIN_DIR/claude"
 PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
 
 require_cmd() {
@@ -34,7 +35,8 @@ require_cmd curl
 require_cmd bash
 
 if command -v claude >/dev/null 2>&1; then
-    print_info "Claude Code ya está instalado: $(command -v claude)"
+    CLAUDE_BIN="$(command -v claude)"
+    print_info "Claude Code ya está instalado: $CLAUDE_BIN"
 else
     print_info "Instalando Claude Code con el instalador oficial..."
     curl -fsSL "$INSTALL_URL" | bash
@@ -43,7 +45,8 @@ fi
 mkdir -p "$LOCAL_BIN_DIR"
 
 if [ -x "$LOCAL_BIN_DIR/claude" ]; then
-    print_info "Claude Code disponible en $LOCAL_BIN_DIR/claude"
+    CLAUDE_BIN="$LOCAL_BIN_DIR/claude"
+    print_info "Claude Code disponible en $CLAUDE_BIN"
 fi
 
 if [[ ":$PATH:" != *":$LOCAL_BIN_DIR:"* ]]; then
@@ -51,9 +54,10 @@ if [[ ":$PATH:" != *":$LOCAL_BIN_DIR:"* ]]; then
     append_if_missing "$HOME/.bashrc" "$PATH_LINE"
 fi
 
-if command -v claude >/dev/null 2>&1; then
+if [ -x "$CLAUDE_BIN" ]; then
+    export PATH="$LOCAL_BIN_DIR:$PATH"
     print_success "Claude Code listo para usar"
-    claude --version
+    "$CLAUDE_BIN" --version
 else
-    die "La instalación terminó pero el comando 'claude' no está disponible todavía"
+    die "La instalación terminó pero no se encontró un binario ejecutable de Claude Code"
 fi
