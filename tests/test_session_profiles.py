@@ -1,7 +1,9 @@
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from installer_lib.config_sync import DEFAULT_CONFIG_TARGETS
+import install
+from installer_lib.config_sync import DEFAULT_CONFIG_TARGETS, ConfigTarget
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,17 @@ class DesktopConfigTests(unittest.TestCase):
         self.assertIn('direction == "import"', source)
         self.assertIn('target.key == "hyprland"', source)
         self.assertIn('["hyprctl", "reload"]', source)
+
+    def test_hyprland_reload_failure_is_not_fatal_outside_session(self):
+        target = ConfigTarget("hyprland", "Hyprland", "hyprland/configs", ".config/hypr")
+        failed_reload = Mock(returncode=1, stdout="", stderr="Couldn't connect to Hyprland")
+
+        with patch("install.command_exists", side_effect=lambda command: command == "hyprctl"):
+            with patch("install.subprocess.run", return_value=failed_reload):
+                messages = install.run_post_config_sync_hook("import", target)
+
+        self.assertIn("[POST] Hyprland reload", messages)
+        self.assertIn("[POST] Hyprland reload skipped: Couldn't connect to Hyprland", messages)
 
     def test_wallpaper_related_import_restarts_hyprpaper_after_sync(self):
         source = INSTALL_PY.read_text(encoding="utf-8")

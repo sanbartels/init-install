@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+from subprocess import TimeoutExpired
 import sys
 import textwrap
 import time
@@ -94,7 +95,7 @@ def stop_sudo_keepalive(process: subprocess.Popen | None) -> None:
         return
     try:
         process.wait(timeout=2)
-    except subprocess.TimeoutExpired:
+    except TimeoutExpired:
         try:
             os.killpg(process.pid, 9)
         except ProcessLookupError:
@@ -214,7 +215,15 @@ def restart_hyprpaper() -> list[str]:
 def run_post_config_sync_hook(direction: str, target: ConfigTarget) -> list[str]:
     messages: list[str] = []
     if direction == "import" and target.key == "hyprland" and command_exists("hyprctl"):
-        messages.extend(["[POST] Hyprland reload", *run_command(["hyprctl", "reload"])])
+        messages.append("[POST] Hyprland reload")
+        result = subprocess.run(["hyprctl", "reload"], text=True, capture_output=True, check=False)
+        output = strip_ansi(((result.stdout or "") + (result.stderr or "")).strip())
+        if result.returncode == 0:
+            messages.extend(line for line in output.splitlines() if line.strip())
+        elif output:
+            messages.append(f"[POST] Hyprland reload skipped: {output}")
+        else:
+            messages.append("[POST] Hyprland reload skipped: no active Hyprland session")
     if direction == "import" and target.key in {"hyprland", "wallpapers"}:
         messages.extend(restart_hyprpaper())
     return messages
