@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_file="${XDG_RUNTIME_DIR:-/tmp}/eww-ai-quota.state"
+config_dir="$HOME/.config/eww"
+
+notify_missing() {
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send \
+      --app-name="Hyprland" \
+      --urgency=normal \
+      --icon=dialog-information \
+      "Cuotas AI" \
+      "Eww no está instalado. Instálalo con: yay -S eww"
+  fi
+}
+
+notify_error() {
+  local message="$1"
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send \
+      --app-name="Hyprland" \
+      --urgency=critical \
+      --icon=dialog-error \
+      "Cuotas AI" \
+      "$message"
+  fi
+}
+
+agy_running() {
+  pgrep -x agy >/dev/null 2>&1
+}
+
+close_all() {
+  eww --config "$config_dir" close chatgpt-usage >/dev/null 2>&1 || true
+  eww --config "$config_dir" close gemini-usage >/dev/null 2>&1 || true
+}
+
+open_only() {
+  local window="$1"
+  close_all
+  eww --config "$config_dir" open "$window"
+}
+
+if ! command -v eww >/dev/null 2>&1; then
+  notify_missing
+  exit 127
+fi
+
+if [[ ! -f "$config_dir/eww.yuck" ]]; then
+  notify_error "No encuentro ~/.config/eww/eww.yuck"
+  exit 1
+fi
+
+eww --config "$config_dir" daemon >/dev/null 2>&1 || true
+sleep 0.15
+
+state="off"
+if [[ -r "$state_file" ]]; then
+  state="$(<"$state_file")"
+fi
+
+case "$state" in
+  off|"")
+    open_only chatgpt-usage || {
+      notify_error "No pude mostrar ChatGPT quota. Revisa la configuración de Eww."
+      exit 1
+    }
+    printf 'chatgpt' >"$state_file"
+    ;;
+  chatgpt)
+    if agy_running; then
+      open_only gemini-usage || {
+        notify_error "No pude mostrar Gemini quota. Revisa la configuración de Eww."
+        exit 1
+      }
+      printf 'gemini' >"$state_file"
+    else
+      close_all
+      printf 'off' >"$state_file"
+    fi
+    ;;
+  gemini|*)
+    close_all
+    printf 'off' >"$state_file"
+    ;;
+esac

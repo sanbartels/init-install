@@ -61,7 +61,7 @@ class ConfigSyncTests(unittest.TestCase):
             self.assertEqual((dest / "kitty.conf").read_text(encoding="utf-8"), "local")
             self.assertFalse(backup_root.exists())
 
-    def test_different_destination_is_backed_up_then_replaced_exactly(self):
+    def test_different_destination_is_backed_up_then_mirrored_exactly_in_place(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "repo" / "swaync"
@@ -70,13 +70,19 @@ class ConfigSyncTests(unittest.TestCase):
             source.mkdir(parents=True)
             dest.mkdir(parents=True)
             (source / "settings.json").write_text('{"theme":"repo"}', encoding="utf-8")
+            (source / "nested").mkdir()
+            (source / "nested" / "enabled.conf").write_text("yes", encoding="utf-8")
             (dest / "settings.json").write_text('{"theme":"local"}', encoding="utf-8")
             (dest / "local-only.json").write_text("remove from destination", encoding="utf-8")
+            (dest / "old-dir").mkdir()
+            (dest / "old-dir" / "old.conf").write_text("remove", encoding="utf-8")
+            original_inode = (dest / "settings.json").stat().st_ino
 
             plan = compare_paths("swaync", source, dest)
             self.assertEqual(plan.status, "different")
             self.assertEqual(plan.changed_count, 1)
-            self.assertEqual(plan.removed_count, 1)
+            self.assertEqual(plan.added_count, 1)
+            self.assertEqual(plan.removed_count, 2)
             result = apply_sync_plan(plan, backup_root=backup_root, confirmed=True, timestamp="2026-01-02_030405")
 
             self.assertEqual(result.action, "updated")
@@ -84,8 +90,31 @@ class ConfigSyncTests(unittest.TestCase):
             backup_path = Path(result.backup_path)
             self.assertTrue((backup_path / "settings.json").exists())
             self.assertTrue((backup_path / "local-only.json").exists())
+            self.assertTrue((backup_path / "old-dir" / "old.conf").exists())
             self.assertEqual((dest / "settings.json").read_text(encoding="utf-8"), '{"theme":"repo"}')
+            self.assertEqual((dest / "settings.json").stat().st_ino, original_inode)
+            self.assertEqual((dest / "nested" / "enabled.conf").read_text(encoding="utf-8"), "yes")
             self.assertFalse((dest / "local-only.json").exists())
+            self.assertFalse((dest / "old-dir").exists())
+
+    def test_destination_only_ignored_name_is_still_removed_for_exact_mirror(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "repo" / "eww"
+            dest = root / "home" / "eww"
+            source.mkdir(parents=True)
+            dest.mkdir(parents=True)
+            (source / "eww.yuck").write_text("repo", encoding="utf-8")
+            (dest / "eww.yuck").write_text("repo", encoding="utf-8")
+            (dest / "node_modules").mkdir()
+            (dest / "node_modules" / "local-only.js").write_text("remove", encoding="utf-8")
+
+            plan = compare_paths("eww", source, dest)
+            self.assertEqual(plan.status, "different")
+            self.assertEqual(plan.removed_count, 1)
+            apply_sync_plan(plan, backup_root=root / "backups", confirmed=True, timestamp="2026-01-02_030405")
+
+            self.assertFalse((dest / "node_modules").exists())
 
     def test_config_target_resolves_repo_and_home_paths(self):
         root = Path("/repo")

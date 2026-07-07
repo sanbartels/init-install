@@ -277,6 +277,7 @@ SOFTWARE_SECTION = Section(
         Category("opencode", "Opencode", "Opencode CLI", "Instalador oficial de Opencode sin configuración.", scripts("opencode/install_opencode.sh"), install_detector=lambda: command_exists("opencode")),
         Category("pi", "Pi Coding Agent", "Instala Pi, clona j0k3r-pi en ~/.pi/agent e instala subagents", "Acciones:\n- curl -fsSL https://pi.dev/install.sh | sh\n- clona/actualiza j0k3r-pi en ~/.pi/agent\n- pi install npm:pi-subagents-j0k3r", scripts("pi/install_pi.sh"), install_detector=lambda: command_exists("pi")),
         Category("claude_code", "Claude Code", "Claude Code CLI", "Instalador oficial de Claude Code.", scripts("claude_code/install_claude_code.sh"), install_detector=lambda: command_exists("claude")),
+        Category("antigravity", "Antigravity CLI", "Antigravity CLI (agy)", "Instalador oficial de Antigravity CLI.", scripts("antigravity/install_antigravity.sh"), install_detector=lambda: command_exists("agy")),
         Category("codex", "Codex", "Codex CLI via Homebrew", "Requiere Homebrew.", scripts("codex/install_codex.sh"), install_detector=lambda: command_exists("codex")),
         Category("intellij", "IntelliJ IDEA", "IntelliJ IDEA Ultimate oficial", "Descarga desde API oficial JetBrains.", scripts("intellij/install_intellij.sh"), install_detector=lambda: command_exists("idea") or Path("/opt/intellij").exists()),
         Category("ssh", "SSH", "Instala OpenSSH", package_text("openssh"), scripts("ssh/install_ssh.sh")),
@@ -633,8 +634,8 @@ class InstallerApp:
                 [
                     "Export configs copia archivos desde ~/.config hacia este repo.",
                     "Revisa bien la selección para no guardar datos privados por accidente.",
-                    "El sync ignora .git, node_modules, __pycache__ y .cache, pero no inspecciona contenidos.",
-                    "Si una config del repo difiere, se creará backup antes de reemplazarla.",
+                    "El origen local manda: se crea, actualiza y elimina en el repo para espejo exacto.",
+                    "Si una config del repo difiere, se creará backup antes de sincronizarla.",
                 ],
             )
         states = [evaluate_config_target(target, direction, SCRIPT_DIR, Path.home()) for target in DEFAULT_CONFIG_TARGETS]
@@ -707,8 +708,8 @@ class InstallerApp:
                 plan.summary,
                 "",
                 "Si confirmas, primero se crea backup del destino.",
-                "Luego se elimina el destino y se copia la fuente completa.",
-                "Los archivos extra que existan solo en destino se eliminan.",
+                "Luego el destino se sincroniza como espejo exacto del origen.",
+                "Los archivos extra que existan solo en destino se eliminan; los archivos comunes se reescriben sin borrar primero.",
                 "No se muestran contenidos para evitar exponer datos sensibles.",
                 "",
                 "S: confirmar  N/Q/Esc: omitir",

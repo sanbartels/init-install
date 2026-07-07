@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-IGNORED_NAMES = {".git", "node_modules", "__pycache__", ".cache"}
-
 
 @dataclass(frozen=True)
 class ConfigTarget:
@@ -99,8 +97,6 @@ def _snapshot(path: Path) -> dict[str, str]:
         return {path.name: _file_hash(path)}
     files: dict[str, str] = {}
     for child in sorted(path.rglob("*")):
-        if any(part in IGNORED_NAMES for part in child.relative_to(path).parts):
-            continue
         if child.is_file():
             files[child.relative_to(path).as_posix()] = _file_hash(child)
     return files
@@ -195,9 +191,58 @@ def evaluate_config_target(
 def _copy_path(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
-        shutil.copytree(source, destination, ignore=shutil.ignore_patterns(*IGNORED_NAMES))
+        shutil.copytree(source, destination)
     else:
         shutil.copy2(source, destination)
+
+
+def _overwrite_file_in_place(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        shutil.copy2(source, destination)
+        return
+
+    if destination.is_dir() and not destination.is_symlink():
+        _remove_path(destination)
+        shutil.copy2(source, destination)
+        return
+
+    with source.open("rb") as src, destination.open("r+b") as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+        dst.truncate()
+    shutil.copystat(source, destination, follow_symlinks=True)
+
+
+def _mirror_path(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    if source.is_file():
+        _overwrite_file_in_place(source, destination)
+        return
+
+    if not source.is_dir():
+        return
+
+    if destination.exists() and (not destination.is_dir() or destination.is_symlink()):
+        _remove_path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copystat(source, destination, follow_symlinks=True)
+
+    for child in sorted(source.rglob("*")):
+        relative = child.relative_to(source)
+        target = destination / relative
+        if child.is_dir():
+            if target.exists() and (not target.is_dir() or target.is_symlink()):
+                _remove_path(target)
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copystat(child, target, follow_symlinks=True)
+        elif child.is_file():
+            _overwrite_file_in_place(child, target)
+
+    for child in sorted(destination.rglob("*"), key=lambda path: len(path.relative_to(destination).parts), reverse=True):
+        relative = child.relative_to(destination)
+        if not (source / relative).exists():
+            _remove_path(child)
 
 
 def _remove_path(path: Path) -> None:
@@ -242,8 +287,7 @@ def apply_sync_plan(
     backup_path: Path | None = None
     if plan.destination.exists():
         backup_path = _backup_destination(plan, backup_root, timestamp)
-        _remove_path(plan.destination)
-        _copy_path(plan.source, plan.destination)
+        _mirror_path(plan.source, plan.destination)
         return SyncResult(plan.key, "updated", plan.source, plan.destination, backup_path=backup_path)
 
     _copy_path(plan.source, plan.destination)

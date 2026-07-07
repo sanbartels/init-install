@@ -85,7 +85,7 @@ COMMAND_DESCRIPTIONS = [
     ("pseudo", "Pseudo tiling"),
     ("togglesplit", "Toggle split"),
     ("toggle-system-widget", "System widget"),
-    ("toggle-chatgpt-usage", "ChatGPT quota widget"),
+    ("toggle-ai-quota", "AI quota carousel"),
     ("toggle-keybinds-cheatsheet", "Show/hide keybinds"),
     ("pavucontrol", "Volume control"),
     ("btop", "System monitor"),

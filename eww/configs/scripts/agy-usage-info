@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Read Gemini/Antigravity quota from the local AGY server while agy is running.
+# Does not read or print OAuth tokens; outputs compact snippets for Eww labels.
+
+mode="${1:-summary}"
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/eww"
+cache_file="$cache_dir/agy-usage.json"
+cache_ttl_seconds="${AGY_USAGE_CACHE_TTL:-20}"
+endpoint_path="/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+
+mkdir -p "$cache_dir"
+chmod 700 "$cache_dir" 2>/dev/null || true
+
+python3 - "$mode" "$cache_file" "$cache_ttl_seconds" "$endpoint_path" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+mode, cache_file, ttl_raw, endpoint_path = sys.argv[1:5]
+cache_path = Path(cache_file)
+ttl = int(ttl_raw)
+
+
+def load_cached():
+    try:
+        if cache_path.exists() and time.time() - cache_path.stat().st_mtime <= ttl:
+            with cache_path.open() as f:
+                return json.load(f)
+    except Exception:
+        return None
+    return None
+
+
+def save_cached(data):
+    tmp = cache_path.with_suffix(".tmp")
+    with tmp.open("w") as f:
+        json.dump(data, f)
+    os.chmod(tmp, 0o600)
+    tmp.replace(cache_path)
+
+
+def agy_pid():
+    try:
+        out = subprocess.check_output(["pgrep", "-n", "agy"], text=True, timeout=1).strip()
+        return out or None
+    except Exception:
+        return None
+
+
+def agy_ports(pid):
+    try:
+        out = subprocess.check_output(["ss", "-ltnp"], text=True, stderr=subprocess.DEVNULL, timeout=1)
+    except Exception:
+        return []
+    ports = []
+    needle = f"pid={pid}"
+    for line in out.splitlines():
+        if needle not in line or "127.0.0.1:" not in line:
+            continue
+        local = line.split()[3]
+        port = local.rsplit(":", 1)[-1]
+        if port.isdigit() and port not in ports:
+            ports.append(port)
+    return ports
+
+
+def post_json(url, tls=False):
+    data = b"{}"
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1"},
+        method="POST",
+    )
+    try:
+        if tls:
+            import ssl
+
+            ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=1.5, context=ctx) as resp:
+                return json.load(resp)
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return json.load(resp)
+    except Exception:
+        return None
+
+
+def fetch_usage():
+    pid = agy_pid()
+    if not pid:
+        return {"_error": "AGY OFF"}
+
+    for port in agy_ports(pid):
+        for scheme, tls in (("http", False), ("https", True)):
+            data = post_json(f"{scheme}://127.0.0.1:{port}{endpoint_path}", tls=tls)
+            if isinstance(data, dict) and data.get("response", {}).get("groups"):
+                save_cached(data)
+                return data
+    return {"_error": "NO PORT"}
+
+
+def parse_reset(value):
+    if not value:
+        return "--"
+    try:
+        from datetime import datetime, timezone
+
+        reset = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        seconds = int((reset - datetime.now(timezone.utc)).total_seconds())
+    except Exception:
+        return "--"
+    seconds = max(0, seconds)
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def bucket(data, bucket_id):
+    for group in data.get("response", {}).get("groups", []) or []:
+        for item in group.get("buckets", []) or []:
+            if item.get("bucketId") == bucket_id:
+                return item
+    return None
+
+
+def bucket_text(data, bucket_id):
+    item = bucket(data, bucket_id)
+    if not item:
+        return "--"
+    try:
+        remaining = int(round(float(item.get("remainingFraction", 0)) * 100))
+        remaining = max(0, min(100, remaining))
+    except Exception:
+        return "--"
+    return f"{remaining}% · {parse_reset(item.get('resetTime'))}"
+
+
+data = load_cached() or fetch_usage()
+err = data.get("_error") if isinstance(data, dict) else "ERROR"
+if err:
+    outputs = {
+        "summary": f"Gemini · {err}",
+        "gemini_5h": "--",
+        "gemini_weekly": "--",
+        "third_party_5h": "--",
+        "third_party_weekly": "--",
+    }
+    print(outputs.get(mode, outputs["summary"]))
+    raise SystemExit(0)
+
+outputs = {
+    "summary": f"Gemini {bucket_text(data, 'gemini-5h')} · W {bucket_text(data, 'gemini-weekly')}",
+    "gemini_5h": bucket_text(data, "gemini-5h"),
+    "gemini_weekly": bucket_text(data, "gemini-weekly"),
+    "third_party_5h": bucket_text(data, "3p-5h"),
+    "third_party_weekly": bucket_text(data, "3p-weekly"),
+}
+print(outputs.get(mode, outputs["summary"]))
+PY

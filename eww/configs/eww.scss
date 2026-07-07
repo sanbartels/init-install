@@ -89,7 +89,8 @@
 .sys-chip.blue .sys-icon { color: #00bfff; }
 .sys-chip.peach .sys-icon { color: #fab387; }
 
-.chatgpt-usage {
+.chatgpt-usage,
+.gemini-usage {
   padding: 4px;
   background: linear-gradient(135deg, rgba(2, 12, 24, 0.94), rgba(7, 24, 44, 0.86));
   border: 1px solid rgba(0, 191, 255, 0.46);
@@ -173,6 +174,16 @@
 .gpt-row.mauve .gpt-row-icon { color: #9dbbff; }
 .gpt-row.blue .gpt-row-icon { color: #00bfff; }
 .gpt-row.green .gpt-row-icon { color: #7df9c7; }
+
+.gemini-usage .gpt-header {
+  background: linear-gradient(135deg, rgba(125, 249, 199, 0.24), rgba(0, 191, 255, 0.14));
+  border-color: rgba(125, 249, 199, 0.30);
+}
+
+.gemini-usage .gpt-brand-icon {
+  color: #7df9c7;
+  text-shadow: 0 0 10px rgba(125, 249, 199, 0.72);
+}
 
 .keybinds-panel {
   padding: 10px;
