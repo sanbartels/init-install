@@ -12,7 +12,7 @@ class DevToolCategoriesTests(unittest.TestCase):
 
         expected_categories = {
             'Category("dev_tools", "Dev tools"': ["github-cli", "lazygit", "git", "curl", "jq"],
-            'Category("node_tools", "Node.js LTS"': ["nodejs-lts-krypton", "npm", "pnpm", "yarn"],
+            'Category("node_tools", "Node.js tools"': ["node_tools/install_node_tools.sh"],
             'Category("python_tools", "Python tools"': ["python", "python-pip", "uv", "python-pynvim", "pipx"],
             'Category("java_tools", "Java tools"': ["jdk-openjdk", "maven", "gradle"],
             'Category("go_rust_tools", "Go / Rust tools"': ["go", "rustup"],
