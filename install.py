@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
-from installer_lib.config_sync import DEFAULT_CONFIG_TARGETS, apply_sync_plan, evaluate_config_target, SyncPlan
+from installer_lib.config_sync import DEFAULT_CONFIG_TARGETS, ConfigTarget, apply_sync_plan, evaluate_config_target, SyncPlan
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -201,6 +201,23 @@ def sync_category_badges(direction: str, states: Iterable) -> dict[str, str]:
         for state in states
         if state.default_selected
     }
+
+
+def restart_hyprpaper() -> list[str]:
+    if not command_exists("hyprpaper"):
+        return []
+    subprocess.run(["pkill", "hyprpaper"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    subprocess.Popen(["hyprpaper"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return ["[POST] Hyprpaper restarted"]
+
+
+def run_post_config_sync_hook(direction: str, target: ConfigTarget) -> list[str]:
+    messages: list[str] = []
+    if direction == "import" and target.key == "hyprland" and command_exists("hyprctl"):
+        messages.extend(["[POST] Hyprland reload", *run_command(["hyprctl", "reload"])])
+    if direction == "import" and target.key in {"hyprland", "wallpapers"}:
+        messages.extend(restart_hyprpaper())
+    return messages
 
 
 BASE_SECTION = Section(
@@ -737,6 +754,8 @@ class InstallerApp:
             if result.backup_path:
                 logs.append(f"Backup: {result.backup_path}")
             logs.append(f"Resultado: {target.title}: {result.action} {result.message}".strip())
+            if result.action in {"copied", "updated"}:
+                logs.extend(run_post_config_sync_hook(direction, target))
             self.draw_install_screen(index, total, target.title, logs)
             time.sleep(0.2)
         self.pause_message("Config sync finalizado", logs[-30:] or ["Sin cambios"])

@@ -15,7 +15,7 @@ class EwwAiQuotaTests(unittest.TestCase):
     def test_super_o_uses_ai_quota_carousel(self):
         source = KEYBINDS.read_text(encoding="utf-8")
 
-        self.assertIn("bind = $mainMod, O, exec, $HOME/.config/eww/scripts/toggle-ai-quota", source)
+        self.assertIn("bind = $mainMod, O, exec, $runOrNotify eww -- $HOME/.config/eww/scripts/toggle-ai-quota", source)
         self.assertNotIn("bind = $mainMod, O, exec, $HOME/.config/eww/scripts/toggle-chatgpt-usage", source)
 
     def test_gemini_quota_widget_and_polls_exist(self):

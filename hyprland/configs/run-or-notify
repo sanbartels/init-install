@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: run-or-notify <dependency>... -- <command> [args...]" >&2
+}
+
+if [[ $# -lt 3 ]]; then
+  usage
+  exit 2
+fi
+
+deps=()
+while (($#)); do
+  if [[ "$1" == "--" ]]; then
+    shift
+    break
+  fi
+  deps+=("$1")
+  shift
+done
+
+if [[ ${#deps[@]} -eq 0 || $# -eq 0 ]]; then
+  usage
+  exit 2
+fi
+
+missing=()
+for dep in "${deps[@]}"; do
+  if ! command -v "$dep" >/dev/null 2>&1; then
+    missing+=("$dep")
+  fi
+done
+
+notify_missing() {
+  local message="Missing dependency: $*"
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "Shortcut unavailable" "$message"
+  else
+    echo "Shortcut unavailable: $message" >&2
+  fi
+}
+
+if [[ ${#missing[@]} -gt 0 ]]; then
+  notify_missing "${missing[*]}"
+  exit 127
+fi
+
+exec "$@"
