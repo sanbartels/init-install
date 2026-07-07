@@ -15,7 +15,7 @@ class DevToolCategoriesTests(unittest.TestCase):
             'Category("node_tools", "Node.js tools"': ["node_tools/install_node_tools.sh"],
             'Category("python_tools", "Python tools"': ["python", "python-pip", "uv", "python-pynvim", "python-pipx"],
             'Category("java_tools", "Java tools"': ["jdk-openjdk", "maven", "gradle"],
-            'Category("go_rust_tools", "Go / Rust tools"': ["go", "rustup"],
+            'Category("go_rust_tools", "Go / Rust tools"': ["go_rust_tools/install_go_rust_tools.sh"],
         }
 
         for category_marker, packages in expected_categories.items():
