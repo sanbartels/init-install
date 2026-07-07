@@ -2,9 +2,42 @@
 
 Scripts bash/Python modulares para replicar y mantener el setup real del usuario sobre Arch Linux.
 
+## Primer arranque en Arch mínimo
+
+Si el sistema recién instalado no tiene `git`, instálalo antes de clonar el repo:
+
+```bash
+pacman -Syu --needed git sudo nano
+```
+
+Si estás conectado como `root`, crea un usuario normal antes de ejecutar el
+instalador. El instalador escribe configs en `$HOME`, instala herramientas de
+usuario y algunos módulos usan el usuario actual para grupos como `docker`.
+Ejecutarlo como `root` dejaría esas configs bajo `/root`.
+
+```bash
+useradd -m -G wheel -s /bin/bash <usuario>
+passwd <usuario>
+EDITOR=nano visudo
+```
+
+En `visudo`, habilita la línea del grupo `wheel`:
+
+```text
+%wheel ALL=(ALL:ALL) ALL
+```
+
+Luego entra con el usuario nuevo:
+
+```bash
+su - <usuario>
+```
+
 ## Uso
 
 ```bash
+git clone https://github.com/sanbartels/init-install.git
+cd init-install
 ./install.sh
 ```
 
