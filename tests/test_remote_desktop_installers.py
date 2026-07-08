@@ -132,17 +132,22 @@ exit 0
     def test_sunshine_installer_uses_arch_user_unit_and_capture_stack(self):
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = Path(tmp)
+            runtime_root = bin_dir / "run-user"
+            runtime_dir = runtime_root / "1000"
             calls = bin_dir / "calls.log"
+            runtime_dir.mkdir(parents=True)
+            (runtime_dir / "bus").touch()
+            self._write_mock(bin_dir / "id", "#!/bin/bash\nif [ \"$1\" = \"-u\" ]; then printf '1000\\n'; else /usr/bin/id \"$@\"; fi\n")
             self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
             self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
             self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
             self._write_mock(
                 bin_dir / "systemctl",
-                f"#!/bin/bash\necho systemctl $@ >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"cat\" ] && [ \"$3\" = \"app-dev.lizardbyte.app.Sunshine.service\" ]; then exit 0; fi\nexit 0\n",
+                f"#!/bin/bash\necho systemctl $@ XDG_RUNTIME_DIR=${{XDG_RUNTIME_DIR:-}} DBUS_SESSION_BUS_ADDRESS=${{DBUS_SESSION_BUS_ADDRESS:-}} >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"cat\" ] && [ \"$3\" = \"app-dev.lizardbyte.app.Sunshine.service\" ]; then exit 0; fi\nexit 0\n",
             )
             self._write_mock(bin_dir / "ss", "#!/bin/bash\nprintf 'LISTEN 0 4096 100.88.77.66:47990 0.0.0.0:*\n'\n")
             self._write_mock(bin_dir / "tailscale", "#!/bin/bash\nif [ \"$1\" = \"ip\" ] && [ \"$2\" = \"-4\" ]; then printf '100.88.77.66\n'; fi\n")
-            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "USER": "tester"}
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "USER": "tester", "SUNSHINE_RUNTIME_ROOT": str(runtime_root)}
 
             result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
             log = calls.read_text(encoding="utf-8")
@@ -151,6 +156,10 @@ exit 0
         self.assertIn("sudo -n true", log)
         self.assertIn("yay -S --needed --noconfirm sunshine", log)
         self.assertIn("sudo -n pacman -S --needed --noconfirm pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-hyprland", log)
+        self.assertIn(f"XDG_RUNTIME_DIR={runtime_dir}", log)
+        self.assertIn(f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_dir / 'bus'}", log)
+        self.assertIn(f"Auto-detected XDG_RUNTIME_DIR: {runtime_dir}", result.stdout)
+        self.assertIn(f"Auto-detected DBUS_SESSION_BUS_ADDRESS: unix:path={runtime_dir / 'bus'}", result.stdout)
         self.assertIn("systemctl --user restart xdg-desktop-portal-hyprland.service", log)
         self.assertIn("systemctl --user is-active --quiet xdg-desktop-portal-hyprland.service", log)
         self.assertIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", log)
@@ -158,6 +167,114 @@ exit 0
         self.assertIn("47990", result.stdout)
         self.assertIn("Remote access status: READY", result.stdout)
         self.assertIn("Tailscale-only remote access was verified", result.stdout)
+
+    def test_sunshine_installer_auto_exports_user_bus_from_runtime_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            runtime_root = bin_dir / "run-user"
+            runtime_dir = runtime_root / "1000"
+            calls = bin_dir / "calls.log"
+            runtime_dir.mkdir(parents=True)
+            (runtime_dir / "bus").touch()
+            self._write_mock(bin_dir / "id", "#!/bin/bash\nif [ \"$1\" = \"-u\" ]; then printf '1000\\n'; else /usr/bin/id \"$@\"; fi\n")
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+            self._write_mock(
+                bin_dir / "systemctl",
+                f"#!/bin/bash\necho systemctl $@ XDG_RUNTIME_DIR=${{XDG_RUNTIME_DIR:-}} DBUS_SESSION_BUS_ADDRESS=${{DBUS_SESSION_BUS_ADDRESS:-}} >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show-environment\" ]; then exit 1; fi\nexit 0\n",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "USER": "tester", "SUNSHINE_RUNTIME_ROOT": str(runtime_root)}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"Auto-detected XDG_RUNTIME_DIR: {runtime_dir}", result.stdout)
+        self.assertIn(f"Auto-detected DBUS_SESSION_BUS_ADDRESS: unix:path={runtime_dir / 'bus'}", result.stdout)
+        self.assertIn(f"XDG_RUNTIME_DIR={runtime_dir}", log)
+        self.assertIn(f"DBUS_SESSION_BUS_ADDRESS=unix:path={runtime_dir / 'bus'}", log)
+        self.assertIn("User systemd bus is not available", result.stdout)
+
+    def test_sunshine_installer_uses_sudo_user_uid_for_user_bus_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            runtime_root = bin_dir / "run-user"
+            desktop_runtime_dir = runtime_root / "1000"
+            root_runtime_dir = runtime_root / "0"
+            calls = bin_dir / "calls.log"
+            desktop_runtime_dir.mkdir(parents=True)
+            root_runtime_dir.mkdir(parents=True)
+            (desktop_runtime_dir / "bus").touch()
+            (root_runtime_dir / "bus").touch()
+            self._write_mock(
+                bin_dir / "id",
+                f"""#!/bin/bash
+echo id $@ >> {calls}
+if [ "$1" = "-u" ] && [ "$2" = "santiago" ]; then printf '1000\n'; exit 0; fi
+if [ "$1" = "-u" ]; then printf '0\n'; exit 0; fi
+/usr/bin/id "$@"
+""",
+            )
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+            self._write_mock(
+                bin_dir / "systemctl",
+                f"#!/bin/bash\necho systemctl $@ XDG_RUNTIME_DIR=${{XDG_RUNTIME_DIR:-}} DBUS_SESSION_BUS_ADDRESS=${{DBUS_SESSION_BUS_ADDRESS:-}} >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show-environment\" ]; then exit 1; fi\nexit 0\n",
+            )
+            env = {
+                "PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin",
+                "SUDO_USER": "santiago",
+                "USER": "root",
+                "SUNSHINE_RUNTIME_ROOT": str(runtime_root),
+            }
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("id -u santiago", log)
+        self.assertIn(f"Auto-detected XDG_RUNTIME_DIR: {desktop_runtime_dir}", result.stdout)
+        self.assertIn(f"Auto-detected DBUS_SESSION_BUS_ADDRESS: unix:path={desktop_runtime_dir / 'bus'}", result.stdout)
+        self.assertIn("Target user: santiago", result.stdout)
+        self.assertIn("Target UID: 1000", result.stdout)
+        self.assertIn(f"XDG_RUNTIME_DIR={desktop_runtime_dir}", log)
+        self.assertIn(f"DBUS_SESSION_BUS_ADDRESS=unix:path={desktop_runtime_dir / 'bus'}", log)
+        self.assertNotIn(f"XDG_RUNTIME_DIR={root_runtime_dir}", log)
+        self.assertNotIn(f"DBUS_SESSION_BUS_ADDRESS=unix:path={root_runtime_dir / 'bus'}", log)
+        self.assertNotIn(f"Auto-detected XDG_RUNTIME_DIR: {root_runtime_dir}", result.stdout)
+
+    def test_sunshine_installer_stays_not_ready_when_user_bus_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            runtime_root = bin_dir / "run-user"
+            runtime_dir = runtime_root / "1000"
+            calls = bin_dir / "calls.log"
+            runtime_dir.mkdir(parents=True)
+            self._write_mock(bin_dir / "id", "#!/bin/bash\nif [ \"$1\" = \"-u\" ]; then printf '1000\\n'; else /usr/bin/id \"$@\"; fi\n")
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+            self._write_mock(
+                bin_dir / "systemctl",
+                f"#!/bin/bash\necho systemctl $@ XDG_RUNTIME_DIR=${{XDG_RUNTIME_DIR:-}} DBUS_SESSION_BUS_ADDRESS=${{DBUS_SESSION_BUS_ADDRESS:-}} >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"show-environment\" ]; then exit 1; fi\nexit 0\n",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "USER": "tester", "SUNSHINE_RUNTIME_ROOT": str(runtime_root)}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"Auto-detected XDG_RUNTIME_DIR: {runtime_dir}", result.stdout)
+        self.assertIn(f"user bus socket was not found: {runtime_dir / 'bus'}", result.stdout)
+        self.assertIn(f"XDG_RUNTIME_DIR={runtime_dir}", log)
+        self.assertIn("DBUS_SESSION_BUS_ADDRESS=", log)
+        self.assertIn("User systemd bus is not available", result.stdout)
+        self.assertIn("Remote access status: NOT READY", result.stdout)
+        self.assertIn("auto-detects the desktop user's /run/user/<uid>/bus", result.stdout)
+        self.assertIn("Remote access verification failed", result.stderr)
+        self.assertNotIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", log)
 
     def test_sunshine_installer_marks_not_ready_when_hyprland_portal_is_inactive(self):
         with tempfile.TemporaryDirectory() as tmp:

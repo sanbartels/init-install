@@ -76,6 +76,16 @@ current_user() {
 	fi
 }
 
+current_user_uid() {
+	local user="$1"
+
+	if [ -z "$user" ]; then
+		return 0
+	fi
+
+	id -u "$user" 2>/dev/null || true
+}
+
 enable_linger_if_possible() {
 	local user
 	user="$(current_user)"
@@ -92,6 +102,75 @@ enable_linger_if_possible() {
 	else
 		print_warning "loginctl is not available; if launching from SSH, enable linger manually on systemd systems."
 	fi
+}
+
+auto_discover_user_systemd_bus() {
+	local user uid runtime_root runtime_dir bus_path
+	user="$(current_user)"
+	uid="$(current_user_uid "$user")"
+	runtime_root="${SUNSHINE_RUNTIME_ROOT:-/run/user}"
+
+	if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
+		if [ -n "$uid" ]; then
+			runtime_dir="${runtime_root%/}/$uid"
+			if [ -d "$runtime_dir" ]; then
+				export XDG_RUNTIME_DIR="$runtime_dir"
+				print_info "Auto-detected XDG_RUNTIME_DIR: $XDG_RUNTIME_DIR"
+			else
+				print_warning "XDG_RUNTIME_DIR is not set and auto-detect path does not exist: $runtime_dir"
+			fi
+		else
+			print_warning "XDG_RUNTIME_DIR is not set and the target user id could not be detected for user '${user:-unknown}'."
+		fi
+	fi
+
+	if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+		if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+			bus_path="$XDG_RUNTIME_DIR/bus"
+			if [ -e "$bus_path" ]; then
+				export DBUS_SESSION_BUS_ADDRESS="unix:path=$bus_path"
+				print_info "Auto-detected DBUS_SESSION_BUS_ADDRESS: $DBUS_SESSION_BUS_ADDRESS"
+			else
+				print_warning "DBUS_SESSION_BUS_ADDRESS is not set and user bus socket was not found: $bus_path"
+			fi
+		else
+			print_warning "DBUS_SESSION_BUS_ADDRESS is not set and XDG_RUNTIME_DIR is unavailable for auto-detection."
+		fi
+	fi
+}
+
+root_user_service_context_is_safe() {
+	local user uid runtime_root expected_runtime_dir expected_bus_path
+	user="$(current_user)"
+	uid="$(current_user_uid "$user")"
+	runtime_root="${SUNSHINE_RUNTIME_ROOT:-/run/user}"
+
+	if [ "${EUID:-0}" -ne 0 ]; then
+		return 0
+	fi
+
+	if [ -z "$user" ] || [ -z "$uid" ] || [ "$uid" = "0" ]; then
+		print_warning "Sunshine must run as the desktop user, not root; skipping user service startup."
+		echo "Remote access status: NOT READY (desktop user systemd bus was not selected)."
+		echo "Run this installer as the desktop user, or invoke it through sudo with SUDO_USER set to the desktop account."
+		return 1
+	fi
+
+	expected_runtime_dir="${runtime_root%/}/$uid"
+	expected_bus_path="$expected_runtime_dir/bus"
+	if [ "${XDG_RUNTIME_DIR:-}" != "$expected_runtime_dir" ] || \
+		[ "${DBUS_SESSION_BUS_ADDRESS:-}" != "unix:path=$expected_bus_path" ] || \
+		[ ! -e "$expected_bus_path" ]; then
+		print_warning "Running as root/sudo, but the desktop user's systemd bus is not safely selected."
+		echo "Remote access status: NOT READY (Sunshine user service was not started as root)."
+		echo "Target desktop user: $user (uid $uid)"
+		echo "Expected XDG_RUNTIME_DIR: $expected_runtime_dir"
+		echo "Expected DBUS_SESSION_BUS_ADDRESS: unix:path=$expected_bus_path"
+		echo "Run this installer inside the graphical session for '$user', or start that desktop session so the user bus exists."
+		return 1
+	fi
+
+	return 0
 }
 
 sunshine_unit_exists() {
@@ -113,7 +192,13 @@ find_sunshine_unit() {
 }
 
 print_user_service_context() {
+	local user uid
+	user="$(current_user)"
+	uid="$(current_user_uid "$user")"
+
 	print_info "User service context:"
+	echo "  - Target user: ${user:-unknown}"
+	echo "  - Target UID: ${uid:-unknown}"
 	echo "  - USER: ${USER:-unknown}"
 	echo "  - XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR:-not set}"
 	echo "  - DBUS_SESSION_BUS_ADDRESS: ${DBUS_SESSION_BUS_ADDRESS:-not set}"
@@ -126,7 +211,8 @@ ensure_hyprland_portal_ready() {
 	if ! systemctl --user show-environment >/dev/null 2>&1; then
 		print_warning "User systemd bus is not available; cannot start $portal_unit before Sunshine."
 		echo "Remote access status: NOT READY (Hyprland portal could not be verified)."
-		echo "Run this installer inside the graphical user session or an SSH session with XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS for the desktop user."
+		echo "The installer auto-detects the desktop user's /run/user/<uid>/bus when present; the user systemd bus is still unreachable."
+		echo "Run this installer inside the graphical user session, or start the desktop session so XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS exist for the desktop user."
 		echo "Diagnostics to run inside the graphical user session:"
 		echo "  systemctl --user status xdg-desktop-portal-hyprland.service --no-pager"
 		echo "  journalctl --user -u xdg-desktop-portal-hyprland.service -b --no-pager"
@@ -227,7 +313,11 @@ enable_sunshine_service() {
 		return
 	fi
 
+	auto_discover_user_systemd_bus
 	print_user_service_context
+	if ! root_user_service_context_is_safe; then
+		return
+	fi
 	systemctl --user daemon-reload 2>/dev/null || true
 	if ! ensure_hyprland_portal_ready; then
 		return
