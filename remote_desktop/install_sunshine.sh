@@ -7,6 +7,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 SUNSHINE_REMOTE_ACCESS_READY=0
+SUDO_PREFLIGHT_ERROR="sudo credentials are not available for non-interactive execution. Run 'sudo -v' in an interactive SSH session before launching this installer, or run it from the init-install menu where sudo preflight/cache is available."
 
 print_info() { echo -e "${GREEN}[SUNSHINE]${NC} $*"; }
 print_warning() { echo -e "${YELLOW}[SUNSHINE]${NC} $*"; }
@@ -25,16 +26,40 @@ require_cmd() {
 	command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+sudo_preflight() {
+	if sudo -n true >/dev/null 2>&1; then
+		return 0
+	fi
+
+	die "$SUDO_PREFLIGHT_ERROR"
+}
+
+run_with_sudo() {
+	sudo_preflight
+
+	if sudo -n "$@"; then
+		return 0
+	fi
+
+	local status=$?
+	if ! sudo -n true >/dev/null 2>&1; then
+		die "$SUDO_PREFLIGHT_ERROR"
+	fi
+
+	return "$status"
+}
+
 install_packages() {
 	require_cmd yay
 	require_cmd sudo
 	require_cmd pacman
+	sudo_preflight
 
 	print_info "Installing Sunshine from AUR..."
 	yay -S --needed --noconfirm sunshine
 
 	print_info "Ensuring Wayland capture dependencies for Hyprland..."
-	sudo pacman -S --needed --noconfirm \
+	run_with_sudo pacman -S --needed --noconfirm \
 		pipewire \
 		wireplumber \
 		xdg-desktop-portal \
@@ -62,7 +87,7 @@ enable_linger_if_possible() {
 
 	if command -v loginctl >/dev/null 2>&1; then
 		print_info "Enabling linger for user '$user' so the Sunshine user service can survive SSH sessions..."
-		sudo loginctl enable-linger "$user" 2>/dev/null || \
+		run_with_sudo loginctl enable-linger "$user" || \
 			print_warning "Could not enable linger automatically. Try: sudo loginctl enable-linger $user"
 	else
 		print_warning "loginctl is not available; if launching from SSH, enable linger manually on systemd systems."
@@ -93,6 +118,44 @@ print_user_service_context() {
 	echo "  - XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR:-not set}"
 	echo "  - DBUS_SESSION_BUS_ADDRESS: ${DBUS_SESSION_BUS_ADDRESS:-not set}"
 	echo "  - Command: systemctl --user enable --now <sunshine-unit>"
+}
+
+ensure_hyprland_portal_ready() {
+	local portal_unit="xdg-desktop-portal-hyprland.service"
+
+	if ! systemctl --user show-environment >/dev/null 2>&1; then
+		print_warning "User systemd bus is not available; cannot start $portal_unit before Sunshine."
+		echo "Remote access status: NOT READY (Hyprland portal could not be verified)."
+		echo "Run this installer inside the graphical user session or an SSH session with XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS for the desktop user."
+		echo "Diagnostics to run inside the graphical user session:"
+		echo "  systemctl --user status xdg-desktop-portal-hyprland.service --no-pager"
+		echo "  journalctl --user -u xdg-desktop-portal-hyprland.service -b --no-pager"
+		return 1
+	fi
+
+	print_info "Restarting Hyprland portal before Sunshine: $portal_unit"
+	if ! systemctl --user restart "$portal_unit"; then
+		print_warning "Could not restart $portal_unit; trying start instead."
+		systemctl --user start "$portal_unit" || true
+	fi
+
+	if systemctl --user is-active --quiet "$portal_unit"; then
+		print_info "Hyprland portal is active."
+		return 0
+	fi
+
+	local portal_state
+	portal_state="$(systemctl --user is-active "$portal_unit" 2>/dev/null || true)"
+	[ -n "$portal_state" ] || portal_state="unknown"
+
+	print_warning "Hyprland portal is not active after restart/start attempt: $portal_unit ($portal_state)."
+	echo "Remote access status: NOT READY (Hyprland portal is $portal_state)."
+	echo "Diagnostics for Hyprland portal readiness:"
+	echo "  systemctl --user status xdg-desktop-portal-hyprland.service --no-pager"
+	echo "  journalctl --user -u xdg-desktop-portal-hyprland.service -b --no-pager"
+	echo "  systemctl --user status pipewire wireplumber xdg-desktop-portal --no-pager"
+	systemctl --user status "$portal_unit" --no-pager || true
+	return 1
 }
 
 tailscale_ipv4() {
@@ -166,6 +229,9 @@ enable_sunshine_service() {
 
 	print_user_service_context
 	systemctl --user daemon-reload 2>/dev/null || true
+	if ! ensure_hyprland_portal_ready; then
+		return
+	fi
 
 	local unit
 	unit="$(find_sunshine_unit || true)"

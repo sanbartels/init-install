@@ -32,6 +32,103 @@ class RemoteDesktopInstallerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing required command: yay", result.stderr)
 
+    def test_sunshine_installer_sudo_preflight_fails_before_privileged_installs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            calls = bin_dir / "calls.log"
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(
+                bin_dir / "sudo",
+                f"#!/bin/bash\necho sudo $@ >> {calls}\nif [ \"$1\" = \"-n\" ] && [ \"$2\" = \"true\" ]; then exit 1; fi\nexit 0\n",
+            )
+            self._write_mock(bin_dir / "pacman", f"#!/bin/bash\necho pacman $@ >> {calls}\nexit 0\n")
+            env = {"PATH": str(bin_dir), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sudo credentials are not available", result.stderr)
+        self.assertIn("sudo -v", result.stderr)
+        self.assertIn("init-install menu", result.stderr)
+        self.assertIn("sudo -n true", log)
+        self.assertNotIn("yay -S", log)
+        self.assertNotIn("sudo pacman", log)
+        self.assertNotIn("pacman -S", log)
+
+    def test_sunshine_installer_fails_clearly_when_sudo_cache_expires_before_pacman(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            calls = bin_dir / "calls.log"
+            state = bin_dir / "sudo-preflight-count"
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(
+                bin_dir / "sudo",
+                f"""#!/bin/bash
+echo sudo $@ >> {calls}
+if [ "$1" = "-n" ] && [ "$2" = "true" ]; then
+  count=0
+  if [ -f {state} ]; then IFS= read -r count < {state}; fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > {state}
+  if [ "$count" -eq 2 ]; then exit 1; fi
+  exit 0
+fi
+exit 0
+""",
+            )
+            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+            env = {"PATH": str(bin_dir), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sudo credentials are not available", result.stderr)
+        self.assertIn("sudo -v", result.stderr)
+        self.assertIn("init-install menu", result.stderr)
+        self.assertEqual(log.count("sudo -n true"), 2)
+        self.assertIn("yay -S --needed --noconfirm sunshine", log)
+        self.assertNotIn("sudo -n pacman", log)
+        self.assertNotIn("pacman -S", log)
+
+    def test_sunshine_installer_fails_clearly_when_sudo_cache_expires_before_loginctl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            calls = bin_dir / "calls.log"
+            state = bin_dir / "sudo-preflight-count"
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(
+                bin_dir / "sudo",
+                f"""#!/bin/bash
+echo sudo $@ >> {calls}
+if [ "$1" = "-n" ] && [ "$2" = "true" ]; then
+  count=0
+  if [ -f {state} ]; then IFS= read -r count < {state}; fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > {state}
+  if [ "$count" -eq 3 ]; then exit 1; fi
+  exit 0
+fi
+exit 0
+""",
+            )
+            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+            self._write_mock(bin_dir / "loginctl", "#!/bin/bash\nexit 0\n")
+            env = {"PATH": str(bin_dir), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sudo credentials are not available", result.stderr)
+        self.assertIn("sudo -v", result.stderr)
+        self.assertIn("init-install menu", result.stderr)
+        self.assertEqual(log.count("sudo -n true"), 3)
+        self.assertIn("yay -S --needed --noconfirm sunshine", log)
+        self.assertIn("sudo -n pacman -S --needed --noconfirm pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-hyprland", log)
+        self.assertNotIn("sudo -n loginctl", log)
+
     def test_sunshine_installer_uses_arch_user_unit_and_capture_stack(self):
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = Path(tmp)
@@ -51,13 +148,51 @@ class RemoteDesktopInstallerTests(unittest.TestCase):
             log = calls.read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sudo -n true", log)
         self.assertIn("yay -S --needed --noconfirm sunshine", log)
-        self.assertIn("sudo pacman -S --needed --noconfirm pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-hyprland", log)
+        self.assertIn("sudo -n pacman -S --needed --noconfirm pipewire wireplumber xdg-desktop-portal xdg-desktop-portal-hyprland", log)
+        self.assertIn("systemctl --user restart xdg-desktop-portal-hyprland.service", log)
+        self.assertIn("systemctl --user is-active --quiet xdg-desktop-portal-hyprland.service", log)
         self.assertIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", log)
         self.assertIn("Moonlight", result.stdout)
         self.assertIn("47990", result.stdout)
         self.assertIn("Remote access status: READY", result.stdout)
         self.assertIn("Tailscale-only remote access was verified", result.stdout)
+
+    def test_sunshine_installer_marks_not_ready_when_hyprland_portal_is_inactive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            calls = bin_dir / "calls.log"
+            self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
+            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+            self._write_mock(
+                bin_dir / "systemctl",
+                f"""#!/bin/bash
+echo systemctl $@ >> {calls}
+if [ "$1" = "--user" ] && [ "$2" = "show-environment" ]; then exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "restart" ] && [ "$3" = "xdg-desktop-portal-hyprland.service" ]; then exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "is-active" ] && [ "$3" = "--quiet" ]; then exit 3; fi
+if [ "$1" = "--user" ] && [ "$2" = "is-active" ] && [ "$3" = "xdg-desktop-portal-hyprland.service" ]; then printf 'inactive\n'; exit 3; fi
+if [ "$1" = "--user" ] && [ "$2" = "status" ] && [ "$3" = "xdg-desktop-portal-hyprland.service" ]; then printf 'Active: inactive (dead)\n'; exit 3; fi
+exit 0
+""",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("systemctl --user restart xdg-desktop-portal-hyprland.service", log)
+        self.assertIn("systemctl --user is-active --quiet xdg-desktop-portal-hyprland.service", log)
+        self.assertNotIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", log)
+        self.assertIn("Hyprland portal is not active", result.stdout)
+        self.assertIn("Remote access status: NOT READY", result.stdout)
+        self.assertIn("xdg-desktop-portal-hyprland.service", result.stdout)
+        self.assertIn("journalctl --user -u xdg-desktop-portal-hyprland.service", result.stdout)
+        self.assertIn("Active: inactive (dead)", result.stdout)
+        self.assertIn("Remote access verification failed", result.stderr)
 
     def test_sunshine_installer_fails_when_listener_is_not_tailscale_only(self):
         with tempfile.TemporaryDirectory() as tmp:
