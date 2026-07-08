@@ -250,6 +250,305 @@ tailscale_ipv4() {
 	fi
 }
 
+sunshine_config_path() {
+	if [ -n "${SUNSHINE_CONFIG_PATH:-}" ]; then
+		printf '%s\n' "$SUNSHINE_CONFIG_PATH"
+		return 0
+	fi
+
+	local user user_home
+	user="$(current_user)"
+	if [ "${EUID:-0}" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ -n "$user" ] && [ "$user" != "root" ] && command -v getent >/dev/null 2>&1; then
+		user_home="$(getent passwd "$user" | awk -F: 'NR == 1 {print $6}')"
+		if [ -n "$user_home" ]; then
+			printf '%s/.config/sunshine/sunshine.conf\n' "$user_home"
+			return 0
+		fi
+	fi
+
+	if [ -n "${HOME:-}" ]; then
+		printf '%s/.config/sunshine/sunshine.conf\n' "$HOME"
+		return 0
+	fi
+
+	return 1
+}
+
+trim_value() {
+	local value="$*"
+	value="${value#"${value%%[![:space:]]*}"}"
+	value="${value%"${value##*[![:space:]]}"}"
+	printf '%s\n' "$value"
+}
+
+safe_origin_host() {
+	local host="$1"
+	local IFS=.
+	local -a labels
+	local label
+
+	[ -n "$host" ] || return 1
+	case "$host" in
+		*'*'*|*'/'*|*':'*|*','*|*'['*|*']'*|*' '*|*'\t'*|.*|*.|*..*)
+			return 1
+			;;
+	esac
+
+	[ "${#host}" -le 253 ] || return 1
+	read -r -a labels <<< "$host"
+	[ "${#labels[@]}" -gt 0 ] || return 1
+	for label in "${labels[@]}"; do
+		[ -n "$label" ] || return 1
+		[ "${#label}" -le 63 ] || return 1
+		printf '%s\n' "$label" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$' || return 1
+	done
+}
+
+SUNSHINE_CSRF_ORIGINS=""
+
+append_csrf_origin() {
+	local origin
+	origin="$(trim_value "$1")"
+
+	[ -n "$origin" ] || return 0
+	if [ -n "$SUNSHINE_CSRF_ORIGINS" ] && printf '%s\n' "$SUNSHINE_CSRF_ORIGINS" | grep -Fxq "$origin"; then
+		return 0
+	fi
+
+	SUNSHINE_CSRF_ORIGINS="${SUNSHINE_CSRF_ORIGINS}${SUNSHINE_CSRF_ORIGINS:+$'\n'}${origin}"
+}
+
+append_csrf_origin_for_host() {
+	local host
+	host="$(trim_value "$1")"
+	host="${host%.}"
+
+	if safe_origin_host "$host"; then
+		append_csrf_origin "https://${host}:47990"
+	fi
+}
+
+csrf_origin_host() {
+	local origin host
+	origin="$(trim_value "$1")"
+
+	case "$origin" in
+		https://*:47990)
+			host="${origin#https://}"
+			host="${host%:47990}"
+			[ -n "$host" ] || return 1
+			printf '%s\n' "$host"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+is_ipv4_host() {
+	local host="$1"
+	local IFS=.
+	local -a octets
+	local octet
+
+	[[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+	read -r -a octets <<< "$host"
+	[ "${#octets[@]}" -eq 4 ] || return 1
+	for octet in "${octets[@]}"; do
+		[[ "$octet" =~ ^[0-9]+$ ]] || return 1
+		[ "$octet" -ge 0 ] && [ "$octet" -le 255 ] || return 1
+	done
+}
+
+is_localhost_origin_host() {
+	local host="$1"
+
+	case "$host" in
+		localhost|127.*)
+			is_ipv4_host "$host" 2>/dev/null || [ "$host" = "localhost" ]
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+is_tailscale_ipv4_host() {
+	local host="$1"
+	local second_octet
+
+	is_ipv4_host "$host" || return 1
+	second_octet="${host#100.}"
+	[ "$second_octet" != "$host" ] || return 1
+	second_octet="${second_octet%%.*}"
+	[ "$second_octet" -ge 64 ] && [ "$second_octet" -le 127 ]
+}
+
+is_tailscale_magic_dns_host() {
+	local host="$1"
+
+	safe_origin_host "$host" || return 1
+	case "$host" in
+		*.*.ts.net)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+is_existing_csrf_origin_trusted() {
+	local origin host
+	origin="$(trim_value "$1")"
+
+	if ! host="$(csrf_origin_host "$origin")"; then
+		return 1
+	fi
+	safe_origin_host "$host" || return 1
+
+	if [ -n "$SUNSHINE_CSRF_ORIGINS" ] && printf '%s\n' "$SUNSHINE_CSRF_ORIGINS" | grep -Fxq "$origin"; then
+		return 0
+	fi
+
+	case "$origin" in
+		https://arch:47990)
+			return 0
+			;;
+	esac
+
+	is_localhost_origin_host "$host" || is_tailscale_ipv4_host "$host" || is_tailscale_magic_dns_host "$host"
+}
+
+append_existing_csrf_origins() {
+	local config_path="$1"
+	local raw_origin origin
+
+	[ -f "$config_path" ] || return 0
+	while IFS= read -r raw_origin; do
+		origin="$(trim_value "$raw_origin")"
+		[ -n "$origin" ] || continue
+		if is_existing_csrf_origin_trusted "$origin"; then
+			append_csrf_origin "$origin"
+		else
+			print_warning "Dropping unsafe or malformed Sunshine csrf_allowed_origins entry: $origin"
+		fi
+	done < <(
+		awk -F= '
+			{
+				key = $1
+				gsub(/^[ \t]+|[ \t]+$/, "", key)
+				if (key == "csrf_allowed_origins") {
+					value = substr($0, index($0, "=") + 1)
+					gsub(/,/, "\n", value)
+					print value
+				}
+			}
+		' "$config_path"
+	)
+}
+
+append_tailscale_csrf_origins() {
+	local tailscale_ip status_hosts status_host
+
+	append_csrf_origin_for_host "arch"
+
+	tailscale_ip="$(tailscale_ipv4)"
+	if [ -n "$tailscale_ip" ]; then
+		append_csrf_origin_for_host "$tailscale_ip"
+	fi
+
+	if ! command -v tailscale >/dev/null 2>&1; then
+		return 0
+	fi
+
+	status_hosts="$(tailscale status --json 2>/dev/null | awk '
+		/"Self"[[:space:]]*:/ { in_self = 1 }
+		in_self && /"HostName"[[:space:]]*:/ {
+			value = $0
+			sub(/^.*"HostName"[[:space:]]*:[[:space:]]*"/, "", value)
+			sub(/".*$/, "", value)
+			print value
+		}
+		in_self && /"DNSName"[[:space:]]*:/ {
+			value = $0
+			sub(/^.*"DNSName"[[:space:]]*:[[:space:]]*"/, "", value)
+			sub(/".*$/, "", value)
+			print value
+		}
+		in_self && /^[[:space:]]*}/ { in_self = 0 }
+	' || true)"
+
+	if [ -z "$status_hosts" ] && [ -n "$tailscale_ip" ]; then
+		status_hosts="$(tailscale status 2>/dev/null | awk -v ip="$tailscale_ip" '$1 == ip {print $2; exit}' || true)"
+	fi
+
+	if [ -z "$status_hosts" ] && command -v hostname >/dev/null 2>&1; then
+		status_hosts="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)"
+	fi
+
+	while IFS= read -r status_host; do
+		append_csrf_origin_for_host "$status_host"
+	done <<< "$status_hosts"
+}
+
+write_sunshine_csrf_origins() {
+	local config_path="$1"
+	local joined=""
+	local count=0
+	local origin tmp_path
+
+	while IFS= read -r origin; do
+		[ -n "$origin" ] || continue
+		joined="${joined}${joined:+,}${origin}"
+		count=$((count + 1))
+	done <<< "$SUNSHINE_CSRF_ORIGINS"
+
+	[ -n "$joined" ] || return 0
+
+	tmp_path="${config_path}.tmp.$$"
+	awk '
+		{
+			line = $0
+			sub(/^[ \t]+/, "", line)
+			if (line ~ /^csrf_allowed_origins[ \t]*=/) {
+				next
+			}
+			print
+		}
+	' "$config_path" > "$tmp_path"
+	if [ -s "$tmp_path" ]; then
+		printf '\n' >> "$tmp_path"
+	fi
+	printf 'csrf_allowed_origins = %s\n' "$joined" >> "$tmp_path"
+	mv "$tmp_path" "$config_path"
+	chmod 600 "$config_path" 2>/dev/null || print_warning "Could not set secure permissions on $config_path; check file ownership."
+
+	print_info "Configured Sunshine CSRF allowed origins ($count): $joined"
+}
+
+configure_sunshine_csrf_allowed_origins() {
+	local config_path config_dir
+
+	if ! config_path="$(sunshine_config_path)"; then
+		print_warning "Could not determine Sunshine config path; skipping CSRF allowed origins setup."
+		return 0
+	fi
+
+	config_dir="$(dirname "$config_path")"
+	mkdir -p "$config_dir"
+	chmod 700 "$config_dir" 2>/dev/null || print_warning "Could not set secure permissions on $config_dir; check directory ownership."
+	if [ ! -e "$config_path" ]; then
+		: > "$config_path"
+	fi
+	chmod 600 "$config_path" 2>/dev/null || print_warning "Could not set secure permissions on $config_path; check file ownership."
+
+	SUNSHINE_CSRF_ORIGINS=""
+	append_tailscale_csrf_origins
+	append_existing_csrf_origins "$config_path"
+	write_sunshine_csrf_origins "$config_path"
+}
+
 diagnose_sunshine_listeners() {
 	if ! command -v ss >/dev/null 2>&1; then
 		print_warning "Cannot verify Sunshine listeners because 'ss' is not available."
@@ -344,6 +643,7 @@ enable_sunshine_service() {
 
 install_packages
 enable_linger_if_possible
+configure_sunshine_csrf_allowed_origins
 enable_sunshine_service
 
 if [ "$SUNSHINE_REMOTE_ACCESS_READY" -eq 1 ]; then

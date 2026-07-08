@@ -168,6 +168,176 @@ exit 0
         self.assertIn("Remote access status: READY", result.stdout)
         self.assertIn("Tailscale-only remote access was verified", result.stdout)
 
+    def test_sunshine_installer_writes_csrf_allowed_origins_from_tailscale_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            config = home / ".config" / "sunshine" / "sunshine.conf"
+            bin_dir.mkdir()
+            home.mkdir()
+            self._write_sunshine_ready_mocks(bin_dir, calls, "100.66.222.119")
+            self._write_mock(
+                bin_dir / "tailscale",
+                """#!/bin/bash
+if [ "$1" = "ip" ] && [ "$2" = "-4" ]; then printf '100.66.222.119\n'; exit 0; fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then
+  printf '{"Self":{"HostName":"vmi3058231","DNSName":"vmi3058231.tailnet.ts.net."}}\n'
+  exit 0
+fi
+exit 0
+""",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            source = config.read_text(encoding="utf-8")
+            config_mode = config.stat().st_mode & 0o777
+            config_dir_mode = config.parent.stat().st_mode & 0o777
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("csrf_allowed_origins = ", source)
+        self.assertIn("https://arch:47990", source)
+        self.assertIn("https://100.66.222.119:47990", source)
+        self.assertIn("https://vmi3058231:47990", source)
+        self.assertIn("https://vmi3058231.tailnet.ts.net:47990", source)
+        self.assertEqual(config_mode, 0o600)
+        self.assertEqual(config_dir_mode, 0o700)
+        self.assertIn("Configured Sunshine CSRF allowed origins", result.stdout)
+
+    def test_sunshine_installer_preserves_safe_existing_csrf_origins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            config_dir = home / ".config" / "sunshine"
+            config = config_dir / "sunshine.conf"
+            bin_dir.mkdir()
+            config_dir.mkdir(parents=True)
+            config.write_text(
+                "origin_web_ui_allowed = lan\n"
+                "csrf_allowed_origins = https://localhost:47990, https://arch:47990\n",
+                encoding="utf-8",
+            )
+            self._write_sunshine_ready_mocks(bin_dir, calls, "100.66.222.119")
+            self._write_mock(
+                bin_dir / "tailscale",
+                """#!/bin/bash
+if [ "$1" = "ip" ] && [ "$2" = "-4" ]; then printf '100.66.222.119\n'; exit 0; fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then printf '{"Self":{"HostName":"arch"}}\n'; exit 0; fi
+exit 0
+""",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            source = config.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("origin_web_ui_allowed = lan", source)
+        self.assertNotIn("origin_web_ui_allowed = wan", source)
+        self.assertEqual(source.count("https://localhost:47990"), 1)
+        self.assertEqual(source.count("https://arch:47990"), 1)
+        self.assertEqual(source.count("https://100.66.222.119:47990"), 1)
+        self.assertEqual(source.count("csrf_allowed_origins = "), 1)
+
+    def test_sunshine_installer_drops_unsafe_existing_csrf_origins_with_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            config_dir = home / ".config" / "sunshine"
+            config = config_dir / "sunshine.conf"
+            bin_dir.mkdir()
+            config_dir.mkdir(parents=True)
+            config.write_text(
+                "csrf_allowed_origins = https://foreign.example:47990, https://*.example:47990\n"
+                "csrf_allowed_origins = http://localhost:47990, https://arch:47990\n",
+                encoding="utf-8",
+            )
+            self._write_sunshine_ready_mocks(bin_dir, calls, "100.66.222.119")
+            self._write_mock(
+                bin_dir / "tailscale",
+                """#!/bin/bash
+if [ "$1" = "ip" ] && [ "$2" = "-4" ]; then printf '100.66.222.119\n'; exit 0; fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then printf '{"Self":{"HostName":"arch"}}\n'; exit 0; fi
+exit 0
+""",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            source = config.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("https://foreign.example:47990", source)
+        self.assertNotIn("https://*.example:47990", source)
+        self.assertNotIn("http://localhost:47990", source)
+        self.assertEqual(source.count("https://arch:47990"), 1)
+        self.assertIn("Dropping unsafe or malformed Sunshine csrf_allowed_origins entry: https://foreign.example:47990", result.stdout)
+        self.assertIn("Dropping unsafe or malformed Sunshine csrf_allowed_origins entry: https://*.example:47990", result.stdout)
+        self.assertIn("Dropping unsafe or malformed Sunshine csrf_allowed_origins entry: http://localhost:47990", result.stdout)
+
+    def test_sunshine_installer_deduplicates_existing_csrf_origins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            config_dir = home / ".config" / "sunshine"
+            config = config_dir / "sunshine.conf"
+            bin_dir.mkdir()
+            config_dir.mkdir(parents=True)
+            config.write_text(
+                "csrf_allowed_origins = https://localhost:47990, https://localhost:47990\n"
+                "csrf_allowed_origins = https://100.66.222.119:47990\n",
+                encoding="utf-8",
+            )
+            self._write_sunshine_ready_mocks(bin_dir, calls, "100.66.222.119")
+            self._write_mock(
+                bin_dir / "tailscale",
+                """#!/bin/bash
+if [ "$1" = "ip" ] && [ "$2" = "-4" ]; then printf '100.66.222.119\n'; exit 0; fi
+if [ "$1" = "status" ] && [ "$2" = "--json" ]; then printf '{"Self":{"HostName":"arch"}}\n'; exit 0; fi
+exit 0
+""",
+            )
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            source = config.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(source.count("https://localhost:47990"), 1)
+        self.assertEqual(source.count("https://100.66.222.119:47990"), 1)
+        self.assertEqual(source.count("https://arch:47990"), 1)
+        self.assertEqual(source.count("csrf_allowed_origins = "), 1)
+
+    def test_sunshine_installer_continues_with_arch_csrf_origin_without_tailscale_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            config = home / ".config" / "sunshine" / "sunshine.conf"
+            bin_dir.mkdir()
+            home.mkdir()
+            self._write_core_command_wrappers_without_tailscale(bin_dir)
+            self._write_sunshine_ready_mocks(bin_dir, calls, "100.66.222.119")
+            self._write_mock(bin_dir / "ss", "#!/bin/bash\nprintf 'LISTEN 0 4096 100.66.222.119:47990 0.0.0.0:*\n'\n")
+            env = {"PATH": str(bin_dir), "HOME": str(home), "USER": "tester"}
+
+            result = subprocess.run(["/bin/bash", str(SUNSHINE_INSTALLER)], env=env, text=True, capture_output=True)
+            source = config.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("csrf_allowed_origins = https://arch:47990", source)
+        self.assertNotIn("Missing required command: tailscale", result.stderr)
+        self.assertIn("Sunshine listeners exist, but Tailscale IP could not be detected", result.stdout)
+
     def test_sunshine_installer_auto_exports_user_bus_from_runtime_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = Path(tmp)
@@ -393,6 +563,29 @@ exit 0
     def _write_mock(path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
+
+    def _write_sunshine_ready_mocks(self, bin_dir: Path, calls: Path, tailscale_ip: str) -> None:
+        self._write_mock(bin_dir / "id", "#!/bin/bash\nif [ \"$1\" = \"-u\" ]; then printf '1000\\n'; else /usr/bin/id \"$@\"; fi\n")
+        self._write_mock(bin_dir / "yay", f"#!/bin/bash\necho yay $@ >> {calls}\nexit 0\n")
+        self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
+        self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+        self._write_mock(bin_dir / "loginctl", f"#!/bin/bash\necho loginctl $@ >> {calls}\nexit 0\n")
+        self._write_mock(
+            bin_dir / "systemctl",
+            f"#!/bin/bash\necho systemctl $@ >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"cat\" ] && [ \"$3\" = \"app-dev.lizardbyte.app.Sunshine.service\" ]; then exit 0; fi\nexit 0\n",
+        )
+        self._write_mock(bin_dir / "ss", f"#!/bin/bash\nprintf 'LISTEN 0 4096 {tailscale_ip}:47990 0.0.0.0:*\n'\n")
+
+    def _write_core_command_wrappers_without_tailscale(self, bin_dir: Path) -> None:
+        for command, target in {
+            "awk": "/usr/bin/awk",
+            "grep": "/usr/bin/grep",
+            "dirname": "/usr/bin/dirname",
+            "mkdir": "/bin/mkdir",
+            "chmod": "/bin/chmod",
+            "mv": "/bin/mv",
+        }.items():
+            self._write_mock(bin_dir / command, f"#!/bin/bash\nexec {target} \"$@\"\n")
 
 
 if __name__ == "__main__":
