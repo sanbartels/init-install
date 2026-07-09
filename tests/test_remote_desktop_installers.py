@@ -1,4 +1,5 @@
 import os
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -19,9 +20,9 @@ class RemoteDesktopInstallerTests(unittest.TestCase):
         main_action_keys = [action.key for action in install.MAIN_ACTIONS]
 
         self.assertNotIn("remote_desktop", main_action_keys)
-        self.assertIn("sunshine", categories)
         self.assertIn("wayvnc", categories)
-        self.assertEqual(categories["sunshine"].scripts, install.scripts("remote_desktop/install_sunshine.sh"))
+        self.assertNotIn("sunshine", categories)
+        self.assertEqual(categories["wayvnc"].title, "WayVNC")
         self.assertEqual(categories["wayvnc"].scripts, install.scripts("remote_desktop/install_wayvnc.sh"))
 
     def test_sunshine_installer_fails_fast_without_yay(self):
@@ -530,39 +531,154 @@ exit 0
         self.assertIn("Remote access verification failed", result.stderr)
         self.assertIn("install completed, but remote access is not verified/safe yet", result.stderr)
 
-    def test_wayvnc_installer_uses_pacman_through_sudo(self):
+    def test_wayvnc_installer_creates_managed_tailscale_service_and_retires_sunshine(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bin_dir = Path(tmp)
-            calls = bin_dir / "calls.log"
-            self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
-            self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
-            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin"}
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            sunshine_config = home / ".config" / "sunshine" / "sunshine.conf"
+            sunshine_alias = home / ".config" / "systemd" / "user" / "sunshine.service"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            sunshine_alias.parent.mkdir(parents=True)
+            sunshine_config.parent.mkdir(parents=True)
+            sunshine_config.write_text("credentials-preserved\n", encoding="utf-8")
+            sunshine_alias.symlink_to("/usr/lib/systemd/user/app-dev.lizardbyte.app.Sunshine.service")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir), "HYPRLAND_INSTANCE_SIGNATURE": "stale"}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+            launcher = home / ".local" / "bin" / "init-install-wayvnc"
+            service = home / ".config" / "systemd" / "user" / "wayvnc.service"
+            launcher_source = launcher.read_text(encoding="utf-8")
+            service_source = service.read_text(encoding="utf-8")
+            installer_source = WAYVNC_INSTALLER.read_text(encoding="utf-8")
+            sunshine_alias_exists = sunshine_alias.exists()
+            sunshine_config_source = sunshine_config.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for expected in ["sudo pacman -S --needed --noconfirm wayvnc tailscale", "sudo systemctl enable --now tailscaled.service", "systemctl --user disable --now app-dev.lizardbyte.app.Sunshine.service", "systemctl --user disable --now sunshine.service", "systemctl --user enable --now wayvnc.service"]:
+            self.assertIn(expected, log)
+        self.assertFalse(sunshine_alias_exists)
+        self.assertEqual(sunshine_config_source, "credentials-preserved\n")
+        self.assertIn("Refusing to remove unexpected sunshine.service symlink target", installer_source)
+        self.assertNotIn("pacman -R", installer_source)
+        self.assertNotIn("rm -rf", installer_source)
+        for expected in ["hyprctl instances -j", "unset HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY", "WAYLAND_DISPLAY", "Virtual-1", "--keyboard=us", "--output=\"$output_name\"", "\"${tailscale_ip}:${bind_port}\""]:
+            self.assertIn(expected, launcher_source)
+        self.assertNotIn("100.66.222.119", launcher_source)
+        for expected in ["ExecStart=", "init-install-wayvnc", "Restart=on-failure", "RestartSteps=5", "StartLimitBurst=6"]:
+            self.assertIn(expected, service_source)
+
+    def test_wayvnc_installer_rejects_public_or_unexpected_listener_bindings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", listener="0.0.0.0:5900")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("listener is not owned by expected PID 4242 on the current Tailscale IPv4 only", result.stderr)
+        self.assertIn("0.0.0.0:5900", result.stderr)
+
+    def test_wayvnc_installer_fails_before_retiring_sunshine_when_instance_socket_is_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir), "WAYVNC_SESSION_ATTEMPTS": "1"}
 
             result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
             log = calls.read_text(encoding="utf-8")
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("sudo pacman -S --needed --noconfirm wayvnc", log)
-        self.assertIn("Tailscale", result.stdout)
-        self.assertIn("fallback", result.stdout)
-        self.assertIn("wayvnc --keyboard=us <tailscale-ip>:5900", result.stdout)
-        self.assertNotIn("wayvnc --keyboard=us <tailscale-ip> 5900", result.stdout)
-        self.assertIn("XDG_RUNTIME_DIR", result.stdout)
-        self.assertIn("WAYLAND_DISPLAY", result.stdout)
-        self.assertIn("nano", result.stdout)
-        self.assertIn("Ghostty", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No active Hyprland instance", result.stderr)
+        self.assertNotIn("disable --now app-dev.lizardbyte.app.Sunshine.service", log)
 
-    def test_remote_desktop_docs_use_wayvnc_address_port_and_exposure_warning(self):
+    def test_wayvnc_installer_rejects_managed_service_mainpid_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", managed_listener_pid="9999")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("listener is not owned by expected PID 4242", result.stderr)
+        self.assertIn("systemctl --user disable --now wayvnc.service", log)
+        self.assertNotIn("disable --now app-dev.lizardbyte.app.Sunshine.service", log)
+
+    def test_wayvnc_installer_waits_for_delayed_manual_port_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", manual_release_delay_calls=4)
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir), "WAYVNC_PORT_RELEASE_TIMEOUT": "5"}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Stopping current user's manual WayVNC listener on port 5900", result.stdout)
+
+    def test_remote_desktop_docs_lead_with_wayvnc_and_sunshine_preservation(self):
         readme = README.read_text(encoding="utf-8")
 
-        self.assertIn("wayvnc --keyboard=us <tailscale-ip>:5900", readme)
-        self.assertNotIn("wayvnc --keyboard=us <tailscale-ip> 5900", readme)
-        self.assertIn("Do not treat Sunshine as remotely usable until listeners exist and are private to Tailscale", readme)
+        self.assertIn("WayVNC como escritorio remoto normal sobre Tailscale", readme)
+        self.assertIn("systemctl --user status wayvnc.service --no-pager", readme)
+        self.assertIn("journalctl --user -u wayvnc.service -b --no-pager", readme)
+        self.assertIn("WAYVNC_BIND_PORT=5900 ~/.local/bin/init-install-wayvnc", readme)
+        self.assertIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", readme)
+        self.assertIn("0.0.0.0:5900", readme)
+        self.assertIn("It does not remove the Sunshine package", readme)
+        self.assertNotIn("Sunshine para acceso remoto", readme)
 
     @staticmethod
     def _write_mock(path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
+
+    @staticmethod
+    def _create_unix_socket(path: Path) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(str(path))
+        finally:
+            sock.close()
 
     def _write_sunshine_ready_mocks(self, bin_dir: Path, calls: Path, tailscale_ip: str) -> None:
         self._write_mock(bin_dir / "id", "#!/bin/bash\nif [ \"$1\" = \"-u\" ]; then printf '1000\\n'; else /usr/bin/id \"$@\"; fi\n")
@@ -575,6 +691,66 @@ exit 0
             f"#!/bin/bash\necho systemctl $@ >> {calls}\nif [ \"$1\" = \"--user\" ] && [ \"$2\" = \"cat\" ] && [ \"$3\" = \"app-dev.lizardbyte.app.Sunshine.service\" ]; then exit 0; fi\nexit 0\n",
         )
         self._write_mock(bin_dir / "ss", f"#!/bin/bash\nprintf 'LISTEN 0 4096 {tailscale_ip}:47990 0.0.0.0:*\n'\n")
+
+    def _write_wayvnc_success_mocks(self, bin_dir: Path, calls: Path, tailscale_ip: str, listener: str | None = None, managed_listener_pid: str = "4242", manual_release_delay_calls: int = 0) -> None:
+        listener = listener or f"{tailscale_ip}:5900"
+        state_dir = bin_dir.parent
+        probe_pid = state_dir / "probe.pid"
+        managed_pid = state_dir / "managed.pid"
+        ss_count = state_dir / "ss-count"
+        self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
+        self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+        self._write_mock(
+            bin_dir / "systemctl",
+            f"""#!/bin/bash
+echo systemctl $@ >> {calls}
+if [ "$1" = "--user" ] && [ "$2" = "show-environment" ]; then exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "show" ]; then
+  if [ -f {managed_pid} ]; then cat {managed_pid}; else printf '0\n'; fi
+  exit 0
+fi
+if [ "$1" = "--user" ] && [ "$2" = "enable" ] && [ "$3" = "--now" ] && [ "$4" = "wayvnc.service" ]; then printf '4242\n' > {managed_pid}; exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "stop" ] && [ "$3" = "wayvnc.service" ]; then rm -f {managed_pid}; exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "disable" ] && [ "$3" = "--now" ] && [ "$4" = "wayvnc.service" ]; then rm -f {managed_pid}; exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "list-unit-files" ]; then printf '%s enabled\n' "$3"; exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "status" ]; then exit 0; fi
+exit 0
+""",
+        )
+        self._write_mock(bin_dir / "tailscale", f"#!/bin/bash\nif [ \"$1\" = \"ip\" ] && [ \"$2\" = \"-4\" ]; then printf '{tailscale_ip}\\n'; fi\n")
+        self._write_mock(
+            bin_dir / "hyprctl",
+            """#!/bin/bash
+if [ "$1" = "instances" ] && [ "$2" = "-j" ]; then printf '[{"instance":"fresh-instance","wl_socket":"wayland-1"}]\n'; exit 0; fi
+if [ "$1" = "monitors" ] && [ "$2" = "-j" ] && [ "${HYPRLAND_INSTANCE_SIGNATURE:-}" = "fresh-instance" ] && [ "${WAYLAND_DISPLAY:-}" = "wayland-1" ]; then printf '[{"name":"Virtual-1"}]\n'; exit 0; fi
+printf '[]\n'
+exit 0
+""",
+        )
+        self._write_mock(
+            bin_dir / "wayvnc",
+            f"""#!/bin/bash
+target="${{@: -1}}"
+case "$target" in
+  *:5901) printf '%s\n' "$$" > {probe_pid} ;;
+esac
+exec sleep 300
+""",
+        )
+        self._write_mock(
+            bin_dir / "ss",
+            f"""#!/bin/bash
+count=0
+if [ -f {ss_count} ]; then IFS= read -r count < {ss_count}; fi
+count=$((count + 1))
+printf '%s\n' "$count" > {ss_count}
+if [ -f {probe_pid} ]; then printf 'LISTEN 0 4096 {tailscale_ip}:5901 0.0.0.0:* users:(("wayvnc",pid=%s,fd=8))\n' "$(cat {probe_pid})"; fi
+if [ ! -f {managed_pid} ] && [ "$count" -le {manual_release_delay_calls} ]; then printf 'LISTEN 0 4096 {tailscale_ip}:5900 0.0.0.0:* users:(("wayvnc",pid=777,fd=8))\n'; fi
+if [ -f {managed_pid} ]; then printf 'LISTEN 0 4096 {listener} 0.0.0.0:* users:(("wayvnc",pid={managed_listener_pid},fd=8))\n'; fi
+""",
+        )
+        self._write_mock(bin_dir / "ps", "#!/bin/bash\nif [ \"${@: -1}\" = \"777\" ]; then printf 'tester\\n'; else printf 'otheruser\\n'; fi\n")
+        self._write_mock(bin_dir / "id", "#!/bin/bash\nif [ \"$1\" = \"-un\" ]; then printf 'tester\\n'; else /usr/bin/id \"$@\"; fi\n")
 
     def _write_core_command_wrappers_without_tailscale(self, bin_dir: Path) -> None:
         for command, target in {

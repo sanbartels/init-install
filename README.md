@@ -85,32 +85,54 @@ Permite elegir componentes de escritorio:
 - swaync
 - Rofi
 - Kitty
-- Sunshine para acceso remoto con Moonlight sobre Tailscale
-- wayvnc como fallback VNC para Wayland
+- WayVNC como escritorio remoto normal sobre Tailscale
 - GNOME Keyring
 
 Hyprland queda como único compositor gestionado por este dot installer. Los wallpapers se gestionan con Hyprpaper usando `~/.config/wallpapers` en orden aleatorio cada 15 minutos.
 
-Para escritorio remoto, la opción recomendada es Sunshine en el VPS y Moonlight en Mac/iPhone, conectando por IP Tailscale o MagicDNS. `wayvnc` queda disponible como fallback más simple.
+Para escritorio remoto, la opción normal es WayVNC enlazado solo a la IP Tailscale del equipo. Sunshine se conserva instalado como material de rollback, pero el instalador normal lo desactiva porque el VPS actual no ofrece una ruta gráfica/GPU fiable para Sunshine.
 
 Remote desktop operational notes:
 
-- On Arch, Sunshine's user unit can be named `app-dev.lizardbyte.app.Sunshine.service`. The installer detects that unit before falling back to another valid Sunshine unit.
-- Sunshine must run as the desktop user, not as root. When launching from SSH, enable linger for that user and verify the user service context with `systemctl --user`.
-- Hyprland capture requires the user session stack: `pipewire`, `wireplumber`, `xdg-desktop-portal`, and `xdg-desktop-portal-hyprland`.
-- If Sunshine is active but the web UI is unreachable, verify listeners with `ss -tlnp | grep -E ':(47984|47989|47990)'` and inspect `journalctl --user -u app-dev.lizardbyte.app.Sunshine.service -b --no-pager`.
-- For WayVNC over Tailscale, start it from the active Hyprland session with explicit runtime/display variables and keyboard layout:
+- Install from the menu: `Install desktop / bar -> WayVNC`. The installer creates `~/.local/bin/init-install-wayvnc` and `~/.config/systemd/user/wayvnc.service`.
+- The launcher discovers the current Tailscale IPv4 dynamically, waits for the active Hyprland/Wayland session, targets `Virtual-1`, uses `--keyboard=us`, and binds only to `<tailscale-ip>:5900`.
+- Verify and recover with:
 
   ```bash
-  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
-  export XKB_DEFAULT_LAYOUT=us
-  export XKB_DEFAULT_VARIANT=
-  export XKB_DEFAULT_OPTIONS=
-  wayvnc --keyboard=us <tailscale-ip>:5900
+  systemctl --user status wayvnc.service --no-pager
+  journalctl --user -u wayvnc.service -b --no-pager
+  ss -tlnp | grep ':5900'
+  systemctl --user restart wayvnc.service
+  systemctl --user disable --now wayvnc.service
   ```
 
-- Do not treat Sunshine as remotely usable until listeners exist and are private to Tailscale. Public/all-interface bindings such as `0.0.0.0:47990`, `*:47990`, or `[::]:47990` require firewall/Tailscale exposure review before Moonlight pairing.
+- If the managed service must be rolled back over SSH, stop it first and start a temporary WayVNC process with the same managed launcher/session discovery:
+
+  ```bash
+  systemctl --user disable --now wayvnc.service
+  WAYVNC_BIND_PORT=5900 ~/.local/bin/init-install-wayvnc
+  ```
+
+  If the launcher itself is unavailable, use the same safe shape manually after confirming the active Tailscale IP and Hyprland session:
+
+  ```bash
+  tailscale ip -4
+  hyprctl instances -j
+  hyprctl monitors -j
+  wayvnc -L info --keyboard=us --output=Virtual-1 <tailscale-ip>:5900
+  ```
+
+- Re-enable Sunshine only as an explicit rollback path after stopping WayVNC and accepting the current VPS graphics limitations:
+
+  ```bash
+  systemctl --user disable --now wayvnc.service
+  systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service
+  journalctl --user -u app-dev.lizardbyte.app.Sunshine.service -b --no-pager
+  ss -tlnp | grep -E ':(47984|47989|47990)'
+  ```
+
+- Listener verification must show the current Tailscale IP only, for example `100.x.y.z:5900`; public/all-interface bindings such as `0.0.0.0:5900`, `*:5900`, `[::]:5900`, localhost-only, or unexpected addresses are rejected.
+- The installer disables known Sunshine user units (`app-dev.lizardbyte.app.Sunshine.service`, `sunshine.service`) and removes only the managed `~/.config/systemd/user/sunshine.service` symlink when it points at the packaged unit. It does not remove the Sunshine package, `~/.config/sunshine`, credentials, apps, logs, or state.
 - Validate WayVNC keyboard input in `nano` or another real editor. Raw `cat` can show control/ANSI sequences such as `^H` and produce misleading results.
 - If Ghostty looks dark or blurred through VNC, disable remote-session opacity/blur settings such as `background-opacity` and `background-blur-radius`, or use a clean test terminal profile.
 
