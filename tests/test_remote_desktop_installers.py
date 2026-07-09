@@ -561,7 +561,10 @@ exit 0
             sunshine_config_source = sunshine_config.read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for expected in ["sudo pacman -S --needed --noconfirm wayvnc tailscale", "sudo systemctl enable --now tailscaled.service", "systemctl --user disable --now app-dev.lizardbyte.app.Sunshine.service", "systemctl --user disable --now sunshine.service", "systemctl --user enable --now wayvnc.service"]:
+        self.assertNotIn("sudo -n true", log)
+        self.assertNotIn("sudo pacman -S", log)
+        self.assertNotIn("sudo systemctl enable --now tailscaled.service", log)
+        for expected in ["systemctl --user disable --now app-dev.lizardbyte.app.Sunshine.service", "systemctl --user disable --now sunshine.service", "systemctl --user enable --now wayvnc.service"]:
             self.assertIn(expected, log)
         self.assertFalse(sunshine_alias_exists)
         self.assertEqual(sunshine_config_source, "credentials-preserved\n")
@@ -573,6 +576,150 @@ exit 0
         self.assertNotIn("100.66.222.119", launcher_source)
         for expected in ["ExecStart=", "init-install-wayvnc", "Restart=on-failure", "RestartSteps=5", "StartLimitBurst=6"]:
             self.assertIn(expected, service_source)
+
+    def test_wayvnc_installer_installs_missing_package_only_after_sudo_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", missing_packages=("wayvnc",))
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sudo -n true", log)
+        self.assertIn("sudo -n pacman -S --needed --noconfirm wayvnc", log)
+        self.assertLess(log.index("sudo -n true"), log.index("sudo -n pacman -S --needed --noconfirm wayvnc"))
+        self.assertNotIn("sudo systemctl enable --now tailscaled.service", log)
+
+    def test_wayvnc_installer_repairs_inactive_or_disabled_tailscaled_after_sudo_preflight(self):
+        for enabled, active in [(False, True), (True, False)]:
+            with self.subTest(enabled=enabled, active=active):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    bin_dir = root / "bin"
+                    home = root / "home"
+                    calls = root / "calls.log"
+                    runtime_dir = root / "run-user" / "1000"
+                    bin_dir.mkdir()
+                    home.mkdir()
+                    runtime_dir.mkdir(parents=True)
+                    self._create_unix_socket(runtime_dir / "wayland-1")
+                    self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", tailscaled_enabled=enabled, tailscaled_active=active)
+                    env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+                    result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+                    log = calls.read_text(encoding="utf-8")
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("sudo -n true", log)
+                self.assertIn("sudo -n systemctl enable --now tailscaled.service", log)
+                self.assertLess(log.index("sudo -n true"), log.index("sudo -n systemctl enable --now tailscaled.service"))
+                self.assertNotIn("sudo pacman -S", log)
+
+    def test_wayvnc_installer_fails_before_gui_mutation_when_privileged_remediation_lacks_sudo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", missing_packages=("tailscale",), sudo_available=False)
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("non-interactive sudo is unavailable", result.stderr)
+        self.assertIn("sudo -n true", log)
+        self.assertNotIn("sudo pacman -S", log)
+        self.assertNotIn("systemctl --user", log)
+        self.assertFalse((home / ".local" / "bin" / "init-install-wayvnc").exists())
+
+    def test_wayvnc_installer_fails_before_gui_mutation_when_sudo_binary_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", missing_packages=("wayvnc",), write_sudo=False)
+            env = {"PATH": str(bin_dir), "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sudo is not installed", result.stderr)
+        self.assertNotIn("systemctl --user", log)
+        self.assertFalse((home / ".local" / "bin" / "init-install-wayvnc").exists())
+
+    def test_wayvnc_installer_fails_before_gui_mutation_when_sudo_auth_expires_after_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", missing_packages=("wayvnc",), sudo_action_available=False)
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Failed to install missing packages after sudo preflight", result.stderr)
+        self.assertIn("sudo -n true", log)
+        self.assertIn("sudo -n pacman -S --needed --noconfirm wayvnc", log)
+        self.assertLess(log.index("sudo -n true"), log.index("sudo -n pacman -S --needed --noconfirm wayvnc"))
+        self.assertNotIn("systemctl --user", log)
+        self.assertFalse((home / ".local" / "bin" / "init-install-wayvnc").exists())
+
+    def test_wayvnc_installer_fails_before_gui_mutation_when_tailscaled_sudo_auth_expires_after_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", tailscaled_active=False, sudo_action_available=False)
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Failed to enable/start tailscaled.service after sudo preflight", result.stderr)
+        self.assertIn("sudo -n true", log)
+        self.assertIn("sudo -n systemctl enable --now tailscaled.service", log)
+        self.assertLess(log.index("sudo -n true"), log.index("sudo -n systemctl enable --now tailscaled.service"))
+        self.assertNotIn("systemctl --user", log)
+        self.assertFalse((home / ".local" / "bin" / "init-install-wayvnc").exists())
 
     def test_wayvnc_installer_rejects_public_or_unexpected_listener_bindings(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -692,18 +839,66 @@ exit 0
         )
         self._write_mock(bin_dir / "ss", f"#!/bin/bash\nprintf 'LISTEN 0 4096 {tailscale_ip}:47990 0.0.0.0:*\n'\n")
 
-    def _write_wayvnc_success_mocks(self, bin_dir: Path, calls: Path, tailscale_ip: str, listener: str | None = None, managed_listener_pid: str = "4242", manual_release_delay_calls: int = 0) -> None:
+    def _write_wayvnc_success_mocks(
+        self,
+        bin_dir: Path,
+        calls: Path,
+        tailscale_ip: str,
+        listener: str | None = None,
+        managed_listener_pid: str = "4242",
+        manual_release_delay_calls: int = 0,
+        missing_packages: tuple[str, ...] = (),
+        tailscaled_enabled: bool = True,
+        tailscaled_active: bool = True,
+        sudo_available: bool = True,
+        sudo_action_available: bool = True,
+        write_sudo: bool = True,
+    ) -> None:
         listener = listener or f"{tailscale_ip}:5900"
         state_dir = bin_dir.parent
         probe_pid = state_dir / "probe.pid"
         managed_pid = state_dir / "managed.pid"
         ss_count = state_dir / "ss-count"
-        self._write_mock(bin_dir / "sudo", f"#!/bin/bash\necho sudo $@ >> {calls}\nexit 0\n")
-        self._write_mock(bin_dir / "pacman", "#!/bin/bash\nexit 0\n")
+        package_state = state_dir / "packages"
+        package_state.mkdir()
+        for package in ("wayvnc", "tailscale"):
+            if package not in missing_packages:
+                (package_state / package).touch()
+        sudo_preflight_status = 0 if sudo_available else 1
+        sudo_action_status = 0 if sudo_action_available else 1
+        if write_sudo:
+            self._write_mock(
+                bin_dir / "sudo",
+                f"""#!/bin/bash
+echo sudo $@ >> {calls}
+if [ "$1" = "-n" ] && [ "$2" = "true" ]; then exit {sudo_preflight_status}; fi
+if [ "$1" = "-n" ] && [ "$2" = "pacman" ]; then
+  [ {sudo_action_status} -eq 0 ] || exit {sudo_action_status}
+  shift 2
+  for arg in "$@"; do
+    case "$arg" in wayvnc|tailscale) touch {package_state}/$arg ;; esac
+  done
+  exit 0
+fi
+if [ "$1" = "-n" ] && [ "$2" = "systemctl" ] && [ "$3" = "enable" ] && [ "$4" = "--now" ] && [ "$5" = "tailscaled.service" ]; then exit {sudo_action_status}; fi
+exit 0
+""",
+            )
+        self._write_mock(
+            bin_dir / "pacman",
+            f"""#!/bin/bash
+if [ "$1" = "-Qi" ]; then test -f {package_state}/$2; exit $?; fi
+exit 0
+""",
+        )
+        enabled_status = 0 if tailscaled_enabled else 1
+        active_status = 0 if tailscaled_active else 1
         self._write_mock(
             bin_dir / "systemctl",
             f"""#!/bin/bash
 echo systemctl $@ >> {calls}
+if [ "$1" = "is-enabled" ] && [ "$2" = "--quiet" ] && [ "$3" = "tailscaled.service" ]; then exit {enabled_status}; fi
+if [ "$1" = "is-active" ] && [ "$2" = "--quiet" ] && [ "$3" = "tailscaled.service" ]; then exit {active_status}; fi
 if [ "$1" = "--user" ] && [ "$2" = "show-environment" ]; then exit 0; fi
 if [ "$1" = "--user" ] && [ "$2" = "show" ]; then
   if [ -f {managed_pid} ]; then cat {managed_pid}; else printf '0\n'; fi

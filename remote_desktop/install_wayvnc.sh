@@ -30,6 +30,25 @@ require_cmd() {
 	command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+sudo_preflight() {
+	if ! command -v sudo >/dev/null 2>&1; then
+		die "Privileged remediation is required, but sudo is not installed. Install missing prerequisites manually, then rerun this installer."
+	fi
+	if ! sudo -n true >/dev/null 2>&1; then
+		die "Privileged remediation is required, but non-interactive sudo is unavailable. Run 'sudo -v' in an interactive SSH session, then rerun this installer before the sudo cache expires."
+	fi
+}
+
+package_installed() {
+	local package="$1"
+	pacman -Qi "$package" >/dev/null 2>&1
+}
+
+tailscaled_ready() {
+	systemctl is-enabled --quiet tailscaled.service >/dev/null 2>&1 && \
+		systemctl is-active --quiet tailscaled.service >/dev/null 2>&1
+}
+
 tailscale_ipv4() {
 	tailscale ip -4 2>/dev/null | awk 'NR == 1 {print $1}'
 }
@@ -69,12 +88,31 @@ cleanup_failed_service() {
 trap cleanup_probe EXIT
 
 install_prerequisites() {
-	require_cmd sudo
 	require_cmd pacman
-	print_info "Installing WayVNC and Tailscale prerequisites from official Arch repositories..."
-	sudo pacman -S --needed --noconfirm wayvnc tailscale
-	print_info "Ensuring tailscaled.service is enabled for private Tailscale binding..."
-	sudo systemctl enable --now tailscaled.service
+	require_cmd systemctl
+	local missing_packages=()
+	local package
+	for package in wayvnc tailscale; do
+		if ! package_installed "$package"; then
+			missing_packages+=("$package")
+		fi
+	done
+	if [ "${#missing_packages[@]}" -gt 0 ]; then
+		print_info "Installing missing WayVNC/Tailscale prerequisites: ${missing_packages[*]}"
+		sudo_preflight
+		sudo -n pacman -S --needed --noconfirm "${missing_packages[@]}" || \
+			die "Failed to install missing packages after sudo preflight. Re-run 'sudo -v' in an interactive SSH session, then retry before the sudo cache expires."
+	else
+		print_info "WayVNC and Tailscale packages are already installed; skipping pacman."
+	fi
+	if tailscaled_ready; then
+		print_info "tailscaled.service is already enabled and active; skipping privileged system service setup."
+	else
+		print_info "Enabling and starting tailscaled.service for private Tailscale binding..."
+		sudo_preflight
+		sudo -n systemctl enable --now tailscaled.service || \
+			die "Failed to enable/start tailscaled.service after sudo preflight. Re-run 'sudo -v' in an interactive SSH session, then retry before the sudo cache expires."
+	fi
 }
 
 preflight_required_state() {
