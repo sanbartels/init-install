@@ -111,16 +111,20 @@ Remote desktop operational notes:
 
   ```bash
   systemctl --user disable --now wayvnc.service
-  WAYVNC_BIND_PORT=5900 ~/.local/bin/init-install-wayvnc
+  WAYVNC_SOCKET_ROLE=rollback WAYVNC_BIND_PORT=5900 ~/.local/bin/init-install-wayvnc
   ```
 
-  If the launcher itself is unavailable, use the same safe shape manually after confirming the active Tailscale IP and Hyprland session:
+  The installer never uses the default WayVNC control socket. Its control sockets are derived from strict launcher roles (`probe`, `managed`, `rollback`) and live under `$XDG_RUNTIME_DIR/init-install-wayvnc/` with mode `0700`, so manual WayVNC processes can keep using `$XDG_RUNTIME_DIR/wayvncctl` or `/tmp/wayvncctl-$UID` untouched. If a previous managed socket exists, the launcher removes it only after proving it is the exact installer-owned socket, `wayvncctl -S` is not responsive, and `ss -xap` shows no live Unix socket process referencing the exact path; ambiguous cases fail closed. Same-user pathname sockets still have an unavoidable time-of-check/time-of-use race, so the launcher rechecks immediately before unlinking.
+
+  If the launcher itself is unavailable, use the same non-default control socket shape manually after confirming the active Tailscale IP and Hyprland session:
 
   ```bash
   tailscale ip -4
   hyprctl instances -j
   hyprctl monitors -j
-  wayvnc -L info --keyboard=us --output=Virtual-1 <tailscale-ip>:5900
+  mkdir -p "$XDG_RUNTIME_DIR/init-install-wayvnc"
+  chmod 700 "$XDG_RUNTIME_DIR/init-install-wayvnc"
+  wayvnc -S "$XDG_RUNTIME_DIR/init-install-wayvnc/manual-5900-$$.sock" -L info --keyboard=us --output=Virtual-1 <tailscale-ip>:5900
   ```
 
 - Re-enable Sunshine only as an explicit rollback path after stopping WayVNC and accepting the current VPS graphics limitations:

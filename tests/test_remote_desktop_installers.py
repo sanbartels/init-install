@@ -543,6 +543,8 @@ exit 0
             bin_dir.mkdir()
             runtime_dir.mkdir(parents=True)
             self._create_unix_socket(runtime_dir / "wayland-1")
+            default_control_socket = runtime_dir / "wayvncctl"
+            default_control_socket.write_text("manual-default-control-socket\n", encoding="utf-8")
             sunshine_alias.parent.mkdir(parents=True)
             sunshine_config.parent.mkdir(parents=True)
             sunshine_config.write_text("credentials-preserved\n", encoding="utf-8")
@@ -559,6 +561,7 @@ exit 0
             installer_source = WAYVNC_INSTALLER.read_text(encoding="utf-8")
             sunshine_alias_exists = sunshine_alias.exists()
             sunshine_config_source = sunshine_config.read_text(encoding="utf-8")
+            default_control_socket_source = default_control_socket.read_text(encoding="utf-8")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("sudo -n true", log)
@@ -568,6 +571,11 @@ exit 0
             self.assertIn(expected, log)
         self.assertFalse(sunshine_alias_exists)
         self.assertEqual(sunshine_config_source, "credentials-preserved\n")
+        self.assertEqual(default_control_socket_source, "manual-default-control-socket\n")
+        self.assertIn("wayvnc -S", log)
+        self.assertIn("/init-install-wayvnc/probe-5901-", log)
+        self.assertIn("wayvncctl -S", log)
+        self.assertIn("/init-install-wayvnc/managed-5900.sock", log)
         self.assertIn("Refusing to remove unexpected sunshine.service symlink target", installer_source)
         self.assertNotIn("pacman -R", installer_source)
         self.assertNotIn("rm -rf", installer_source)
@@ -576,6 +584,195 @@ exit 0
         self.assertNotIn("100.66.222.119", launcher_source)
         for expected in ["ExecStart=", "init-install-wayvnc", "Restart=on-failure", "RestartSteps=5", "StartLimitBurst=6"]:
             self.assertIn(expected, service_source)
+
+    def test_wayvnc_installer_uses_installer_owned_control_socket_namespace(self):
+        script = WAYVNC_INSTALLER.read_text(encoding="utf-8")
+
+        self.assertIn('SOCKET_NAMESPACE_NAME="init-install-wayvnc"', script)
+        self.assertIn('exec wayvnc -S "$control_socket"', script)
+        self.assertIn("probe|rollback", script)
+        self.assertIn("managed-%s.sock", script)
+        self.assertIn("ROLLBACK_SOCKET_PATH", script)
+        self.assertIn('wayvncctl -S "$socket_path" --json version', script)
+        self.assertNotIn("WAYVNC_CONTROL_SOCKET", script)
+        self.assertIn('Managed WayVNC control socket is live; refusing to remove it', script)
+        self.assertIn('Refusing WayVNC control socket outside installer namespace', script)
+        self.assertIn('Refusing to use the default WayVNC control socket', script)
+        self.assertNotIn('rm -f -- "$XDG_RUNTIME_DIR/wayvncctl"', script)
+        self.assertNotIn('rm -f -- "/tmp/wayvncctl-$(id -u)"', script)
+
+    def test_wayvnc_launcher_removes_only_stale_installer_owned_managed_socket(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir()
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+            installer_result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+            managed_socket = runtime_dir / "init-install-wayvnc" / "managed-5900.sock"
+            self.assertTrue(managed_socket.exists())
+            (root / "live-sockets").write_text("", encoding="utf-8")
+
+            launcher_result = subprocess.run(
+                [str(home / ".local" / "bin" / "init-install-wayvnc")],
+                env={**env, "WAYVNC_MOCK_EXIT_AFTER_START": "1", "WAYVNC_BIND_PORT": "5900"},
+                text=True,
+                capture_output=True,
+            )
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertEqual(launcher_result.returncode, 0, launcher_result.stderr)
+        self.assertIn("Removed stale installer-owned managed WayVNC control socket", launcher_result.stderr)
+        self.assertIn(f"wayvnc -S {managed_socket}", log)
+
+    def test_wayvnc_launcher_preserves_live_installer_owned_managed_socket(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir()
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+            installer_result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+            managed_socket = runtime_dir / "init-install-wayvnc" / "managed-5900.sock"
+
+            launcher_result = subprocess.run(
+                [str(home / ".local" / "bin" / "init-install-wayvnc")],
+                env={**env, "WAYVNC_MOCK_EXIT_AFTER_START": "1", "WAYVNC_BIND_PORT": "5900"},
+                text=True,
+                capture_output=True,
+            )
+            managed_socket_exists = managed_socket.exists()
+
+        self.assertNotEqual(launcher_result.returncode, 0)
+        self.assertTrue(managed_socket_exists)
+        self.assertIn("Managed WayVNC control socket is live; refusing to remove it", launcher_result.stderr)
+
+    def test_wayvnc_launcher_rejects_unknown_socket_role_before_start(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir()
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+            installer_result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+            calls.write_text("", encoding="utf-8")
+
+            launcher_result = subprocess.run(
+                [str(home / ".local" / "bin" / "init-install-wayvnc")],
+                env={**env, "WAYVNC_SOCKET_ROLE": "../managed", "WAYVNC_BIND_PORT": "5900"},
+                text=True,
+                capture_output=True,
+            )
+            log = calls.read_text(encoding="utf-8")
+
+        self.assertNotEqual(launcher_result.returncode, 0)
+        self.assertIn("Unknown WAYVNC_SOCKET_ROLE", launcher_result.stderr)
+        self.assertNotIn("wayvnc ", log)
+
+    def test_wayvnc_installer_rejects_symlinked_socket_namespace(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run"
+            namespace_target = root / "escaped-namespace"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir()
+            namespace_target.mkdir()
+            (runtime_dir / "init-install-wayvnc").symlink_to(namespace_target, target_is_directory=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Refusing symlinked WayVNC control socket namespace", result.stderr)
+
+    def test_wayvnc_launcher_preserves_ambiguous_live_unix_socket(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir()
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+            installer_result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+            managed_socket = runtime_dir / "init-install-wayvnc" / "managed-5900.sock"
+            (root / "live-sockets").write_text("", encoding="utf-8")
+            (root / "unix-socket-refs").write_text(f"{managed_socket}\n", encoding="utf-8")
+
+            launcher_result = subprocess.run(
+                [str(home / ".local" / "bin" / "init-install-wayvnc")],
+                env={**env, "WAYVNC_MOCK_EXIT_AFTER_START": "1", "WAYVNC_BIND_PORT": "5900"},
+                text=True,
+                capture_output=True,
+            )
+            managed_socket_exists = managed_socket.exists()
+
+        self.assertNotEqual(launcher_result.returncode, 0)
+        self.assertTrue(managed_socket_exists)
+        self.assertIn("referenced by a live Unix socket", launcher_result.stderr)
+
+    def test_wayvnc_launcher_preserves_managed_socket_when_ss_is_unavailable(self):
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir()
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+            installer_result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            self.assertEqual(installer_result.returncode, 0, installer_result.stderr)
+            managed_socket = runtime_dir / "init-install-wayvnc" / "managed-5900.sock"
+            (root / "live-sockets").write_text("", encoding="utf-8")
+            (root / "ss-unix-fail").touch()
+
+            launcher_result = subprocess.run(
+                [str(home / ".local" / "bin" / "init-install-wayvnc")],
+                env={**env, "WAYVNC_MOCK_EXIT_AFTER_START": "1", "WAYVNC_BIND_PORT": "5900"},
+                text=True,
+                capture_output=True,
+            )
+            managed_socket_exists = managed_socket.exists()
+
+        self.assertNotEqual(launcher_result.returncode, 0)
+        self.assertTrue(managed_socket_exists)
+        self.assertIn("Could not prove managed WayVNC control socket is stale with ss", launcher_result.stderr)
 
     def test_wayvnc_installer_installs_missing_package_only_after_sudo_preflight(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -809,6 +1006,9 @@ exit 0
         self.assertIn("systemctl --user status wayvnc.service --no-pager", readme)
         self.assertIn("journalctl --user -u wayvnc.service -b --no-pager", readme)
         self.assertIn("WAYVNC_BIND_PORT=5900 ~/.local/bin/init-install-wayvnc", readme)
+        self.assertIn("WAYVNC_SOCKET_ROLE=rollback", readme)
+        self.assertIn("$XDG_RUNTIME_DIR/init-install-wayvnc", readme)
+        self.assertIn('wayvnc -S "$XDG_RUNTIME_DIR/init-install-wayvnc/manual-5900-$$.sock"', readme)
         self.assertIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", readme)
         self.assertIn("0.0.0.0:5900", readme)
         self.assertIn("It does not remove the Sunshine package", readme)
@@ -859,6 +1059,9 @@ exit 0
         probe_pid = state_dir / "probe.pid"
         managed_pid = state_dir / "managed.pid"
         ss_count = state_dir / "ss-count"
+        live_sockets = state_dir / "live-sockets"
+        unix_socket_refs = state_dir / "unix-socket-refs"
+        ss_unix_fail = state_dir / "ss-unix-fail"
         package_state = state_dir / "packages"
         package_state.mkdir()
         for package in ("wayvnc", "tailscale"):
@@ -904,7 +1107,27 @@ if [ "$1" = "--user" ] && [ "$2" = "show" ]; then
   if [ -f {managed_pid} ]; then cat {managed_pid}; else printf '0\n'; fi
   exit 0
 fi
-if [ "$1" = "--user" ] && [ "$2" = "enable" ] && [ "$3" = "--now" ] && [ "$4" = "wayvnc.service" ]; then printf '4242\n' > {managed_pid}; exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "enable" ] && [ "$3" = "--now" ] && [ "$4" = "wayvnc.service" ]; then
+  printf '4242\n' > {managed_pid}
+  managed_socket="${{XDG_RUNTIME_DIR}}/init-install-wayvnc/managed-5900.sock"
+  python3 - "$managed_socket" <<'PY'
+import os, socket, sys
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(path)
+    sock.close()
+except OSError:
+    open(path, "a", encoding="utf-8").close()
+PY
+  printf '%s\n' "$managed_socket" >> {live_sockets}
+  exit 0
+fi
 if [ "$1" = "--user" ] && [ "$2" = "stop" ] && [ "$3" = "wayvnc.service" ]; then rm -f {managed_pid}; exit 0; fi
 if [ "$1" = "--user" ] && [ "$2" = "disable" ] && [ "$3" = "--now" ] && [ "$4" = "wayvnc.service" ]; then rm -f {managed_pid}; exit 0; fi
 if [ "$1" = "--user" ] && [ "$2" = "list-unit-files" ]; then printf '%s enabled\n' "$3"; exit 0; fi
@@ -925,16 +1148,66 @@ exit 0
         self._write_mock(
             bin_dir / "wayvnc",
             f"""#!/bin/bash
+echo wayvnc $@ >> {calls}
+socket_path=""
+args=("$@")
+for ((i=0; i < ${{#args[@]}}; i++)); do
+  if [ "${{args[$i]}}" = "-S" ]; then socket_path="${{args[$((i + 1))]}}"; fi
+done
+[ -n "$socket_path" ] || exit 77
+python3 - "$socket_path" <<'PY'
+import os, socket, sys
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), exist_ok=True)
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(path)
+    sock.close()
+except OSError:
+    open(path, "a", encoding="utf-8").close()
+PY
+printf '%s\n' "$socket_path" >> {live_sockets}
 target="${{@: -1}}"
 case "$target" in
   *:5901) printf '%s\n' "$$" > {probe_pid} ;;
 esac
+[ "${{WAYVNC_MOCK_EXIT_AFTER_START:-0}}" = "1" ] && exit 0
 exec sleep 300
+""",
+        )
+        self._write_mock(
+            bin_dir / "wayvncctl",
+            f"""#!/bin/bash
+echo wayvncctl $@ >> {calls}
+socket_path=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-S" ]; then socket_path="$2"; shift 2; continue; fi
+  shift
+done
+[ -n "$socket_path" ] || exit 2
+[ -e "$socket_path" ] || exit 3
+grep -Fxq "$socket_path" {live_sockets} 2>/dev/null || exit 4
+printf '{{"wayvnc":"mock"}}\n'
+exit 0
 """,
         )
         self._write_mock(
             bin_dir / "ss",
             f"""#!/bin/bash
+if printf '%s\n' "$@" | grep -q -- '-x'; then
+  [ ! -f {ss_unix_fail} ] || exit 2
+  if [ -f {unix_socket_refs} ]; then
+    while IFS= read -r socket_path; do
+      [ -n "$socket_path" ] || continue
+      printf 'u_str LISTEN 0 4096 %s 12345 * 0 users:(("not-wayvnc",pid=999,fd=7))\n' "$socket_path"
+    done < {unix_socket_refs}
+  fi
+  exit 0
+fi
 count=0
 if [ -f {ss_count} ]; then IFS= read -r count < {ss_count}; fi
 count=$((count + 1))

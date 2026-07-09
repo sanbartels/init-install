@@ -10,13 +10,16 @@ NC='\033[0m'
 SERVICE_NAME="wayvnc.service"
 MANAGED_PORT="5900"
 PROBE_PORT="5901"
+SOCKET_NAMESPACE_NAME="init-install-wayvnc"
 LAUNCHER_PATH="$HOME/.local/bin/init-install-wayvnc"
 USER_UNIT_DIR="$HOME/.config/systemd/user"
 SERVICE_PATH="$USER_UNIT_DIR/$SERVICE_NAME"
 SUNSHINE_ALIAS="$USER_UNIT_DIR/sunshine.service"
 SUNSHINE_UNITS=(app-dev.lizardbyte.app.Sunshine.service sunshine.service)
 PROBE_PID=""
+PROBE_SOCKET_PATH=""
 ROLLBACK_PID=""
+ROLLBACK_SOCKET_PATH=""
 MANUAL_5900_STOPPED=0
 
 print_info() { echo -e "${GREEN}[WAYVNC]${NC} $*"; }
@@ -74,11 +77,118 @@ service_main_pid() {
 	systemctl --user show "$SERVICE_NAME" --property=MainPID --value 2>/dev/null | awk 'NR == 1 {print $1}'
 }
 
+runtime_dir_value() {
+	local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+	case "$runtime" in
+		/*) ;;
+		*) die "XDG_RUNTIME_DIR must be an absolute active user runtime directory: $runtime" ;;
+	esac
+	case "$runtime" in
+		*$'\n'*|*$'\r'*|*$'\t'*|*' '*) die "XDG_RUNTIME_DIR contains unsafe whitespace: $runtime" ;;
+	esac
+	[ ! -L "$runtime" ] || die "XDG_RUNTIME_DIR must not be a symlink: $runtime"
+	[ -d "$runtime" ] || die "XDG_RUNTIME_DIR does not exist: $runtime"
+	[ -O "$runtime" ] || die "XDG_RUNTIME_DIR is not owned by the current user: $runtime"
+	printf '%s\n' "$runtime"
+}
+
+canonical_path() {
+	python3 - "$1" <<'PY'
+import os, sys
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
+validate_socket_port() {
+	local port="$1"
+	case "$port" in
+		""|*[!0-9]*) die "Invalid WayVNC control socket port: $port" ;;
+	esac
+	[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "Invalid WayVNC control socket port: $port"
+}
+
+validate_socket_nonce() {
+	local role="$1" nonce="$2"
+	case "$nonce" in
+		""|*[!0-9]*) die "Invalid $role WayVNC control socket nonce: $nonce" ;;
+	esac
+}
+
+socket_namespace_dir() {
+	printf '%s/%s\n' "$(runtime_dir_value)" "$SOCKET_NAMESPACE_NAME"
+}
+
+ensure_socket_namespace() {
+	local namespace_dir runtime_dir runtime_real parent_real namespace_real expected_real
+	runtime_dir="$(runtime_dir_value)"
+	namespace_dir="$(socket_namespace_dir)"
+	[ ! -L "$namespace_dir" ] || die "Refusing symlinked WayVNC control socket namespace: $namespace_dir"
+	mkdir -p "$namespace_dir"
+	[ ! -L "$namespace_dir" ] || die "Refusing symlinked WayVNC control socket namespace: $namespace_dir"
+	chmod 0700 "$namespace_dir"
+	[ -d "$namespace_dir" ] || die "Could not create WayVNC control socket namespace: $namespace_dir"
+	[ -O "$namespace_dir" ] || die "WayVNC control socket namespace is not owned by the current user: $namespace_dir"
+	runtime_real="$(canonical_path "$runtime_dir")"
+	parent_real="$(canonical_path "$(dirname "$namespace_dir")")"
+	[ "$parent_real" = "$runtime_real" ] || die "WayVNC control socket namespace escaped XDG_RUNTIME_DIR: $namespace_dir"
+	namespace_real="$(canonical_path "$namespace_dir")"
+	expected_real="$runtime_real/$SOCKET_NAMESPACE_NAME"
+	[ "$namespace_real" = "$expected_real" ] || die "WayVNC control socket namespace resolved unexpectedly: $namespace_dir"
+	printf '%s\n' "$namespace_dir"
+}
+
+installer_socket_path() {
+	local role="$1" port="$2" nonce="${3:-}"
+	local namespace_dir
+	validate_socket_port "$port"
+	namespace_dir="$(ensure_socket_namespace)"
+	case "$role" in
+		probe|rollback)
+			validate_socket_nonce "$role" "$nonce"
+			printf '%s/%s-%s-%s.sock\n' "$namespace_dir" "$role" "$port" "$nonce"
+			;;
+		managed)
+			printf '%s/managed-%s.sock\n' "$namespace_dir" "$port"
+			;;
+		*) die "Unknown WayVNC control socket role: $role" ;;
+	esac
+}
+
+path_is_in_socket_namespace() {
+	local path="$1" namespace_dir namespace_real parent_real
+	namespace_dir="$(ensure_socket_namespace)"
+	case "$path" in
+		"$namespace_dir"/*.sock) ;;
+		*) return 1 ;;
+	esac
+	[ ! -L "$path" ] || return 1
+	namespace_real="$(canonical_path "$namespace_dir")"
+	parent_real="$(canonical_path "$(dirname "$path")")"
+	[ "$parent_real" = "$namespace_real" ] || return 1
+}
+
+remove_exact_installer_socket() {
+	local path="$1" label="$2"
+	[ -n "$path" ] || return 0
+	if ! path_is_in_socket_namespace "$path"; then
+		print_warning "Refusing to remove $label socket outside installer namespace: $path"
+		return 0
+	fi
+	[ -e "$path" ] || return 0
+	if [ -S "$path" ] && [ -O "$path" ]; then
+		rm -f -- "$path"
+		print_info "Removed $label WayVNC control socket: $path"
+	else
+		print_warning "Preserving ambiguous $label control socket: $path"
+	fi
+}
+
 cleanup_probe() {
 	if [ -n "${PROBE_PID:-}" ] && kill -0 "$PROBE_PID" 2>/dev/null; then
 		kill "$PROBE_PID" 2>/dev/null || true
 		wait "$PROBE_PID" 2>/dev/null || true
 	fi
+	remove_exact_installer_socket "${PROBE_SOCKET_PATH:-}" "probe"
 }
 
 cleanup_failed_service() {
@@ -117,7 +227,7 @@ install_prerequisites() {
 
 preflight_required_state() {
 	local cmd tailscale_ip
-	for cmd in systemctl tailscale wayvnc hyprctl ss ps awk grep python3 mktemp readlink dirname id kill sleep; do
+	for cmd in systemctl tailscale wayvnc wayvncctl hyprctl ss ps awk grep python3 mktemp readlink dirname id kill sleep; do
 		require_cmd "$cmd"
 	done
 	for package in wayvnc tailscale; do
@@ -155,6 +265,133 @@ fail() {
 require_cmd() {
 	command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
+runtime_dir_value() {
+	local runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+	case "$runtime" in
+		/*) ;;
+		*) fail "XDG_RUNTIME_DIR must be an absolute active user runtime directory: $runtime" ;;
+	esac
+	case "$runtime" in
+		*$'\n'*|*$'\r'*|*$'\t'*|*' '*) fail "XDG_RUNTIME_DIR contains unsafe whitespace: $runtime" ;;
+	esac
+	[ ! -L "$runtime" ] || fail "XDG_RUNTIME_DIR must not be a symlink: $runtime"
+	[ -d "$runtime" ] || fail "XDG_RUNTIME_DIR does not exist: $runtime"
+	[ -O "$runtime" ] || fail "XDG_RUNTIME_DIR is not owned by the current user: $runtime"
+	printf '%s\n' "$runtime"
+}
+canonical_path() {
+	python3 - "$1" <<'PY'
+import os, sys
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+validate_socket_role() {
+	local role="$1"
+	case "$role" in
+		probe|managed|rollback) ;;
+		*) fail "Unknown WAYVNC_SOCKET_ROLE: $role" ;;
+	esac
+}
+validate_socket_port() {
+	local port="$1"
+	case "$port" in
+		""|*[!0-9]*) fail "Invalid WAYVNC_BIND_PORT: $port" ;;
+	esac
+	[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "Invalid WAYVNC_BIND_PORT: $port"
+}
+socket_namespace() {
+	local runtime_dir namespace_dir runtime_real parent_real namespace_real expected_real
+	runtime_dir="$(runtime_dir_value)"
+	namespace_dir="$runtime_dir/init-install-wayvnc"
+	[ ! -L "$namespace_dir" ] || fail "Refusing symlinked WayVNC control socket namespace: $namespace_dir"
+	mkdir -p "$namespace_dir"
+	[ ! -L "$namespace_dir" ] || fail "Refusing symlinked WayVNC control socket namespace: $namespace_dir"
+	chmod 0700 "$namespace_dir"
+	[ -d "$namespace_dir" ] || fail "Could not create WayVNC control socket namespace: $namespace_dir"
+	[ -O "$namespace_dir" ] || fail "WayVNC control socket namespace is not owned by the current user: $namespace_dir"
+	runtime_real="$(canonical_path "$runtime_dir")"
+	parent_real="$(canonical_path "$(dirname "$namespace_dir")")"
+	[ "$parent_real" = "$runtime_real" ] || fail "WayVNC control socket namespace escaped XDG_RUNTIME_DIR: $namespace_dir"
+	namespace_real="$(canonical_path "$namespace_dir")"
+	expected_real="$runtime_real/init-install-wayvnc"
+	[ "$namespace_real" = "$expected_real" ] || fail "WayVNC control socket namespace resolved unexpectedly: $namespace_dir"
+	printf '%s\n' "$namespace_dir"
+}
+control_socket_for_role() {
+	local role="$1" port="$2" namespace_dir
+	validate_socket_role "$role"
+	validate_socket_port "$port"
+	namespace_dir="$(socket_namespace)"
+	case "$role" in
+		probe|rollback) printf '%s/%s-%s-%s.sock\n' "$namespace_dir" "$role" "$port" "$$" ;;
+		managed) printf '%s/managed-%s.sock\n' "$namespace_dir" "$port" ;;
+	esac
+}
+validate_control_socket_path() {
+	local path="$1" namespace_dir namespace_real parent_real runtime_dir
+	runtime_dir="$(runtime_dir_value)"
+	namespace_dir="$(socket_namespace)"
+	case "$path" in
+		"$namespace_dir"/*.sock) ;;
+		*) fail "Refusing WayVNC control socket outside installer namespace: $path" ;;
+	esac
+	[ ! -L "$path" ] || fail "Refusing symlinked WayVNC control socket path: $path"
+	namespace_real="$(canonical_path "$namespace_dir")"
+	parent_real="$(canonical_path "$(dirname "$path")")"
+	[ "$parent_real" = "$namespace_real" ] || fail "Refusing WayVNC control socket with escaped parent: $path"
+	case "$path" in
+		"$runtime_dir/wayvncctl"|"/tmp/wayvncctl-$(id -u)")
+			fail "Refusing to use the default WayVNC control socket: $path"
+			;;
+	esac
+}
+socket_path_referenced_by_ss() {
+	local path="$1" output
+	if ! output="$(ss -H -xap 2>&1)"; then
+		return 2
+	fi
+	if printf '%s\n' "$output" | awk -v path="$path" 'index($0, path) { found=1 } END { exit found ? 0 : 1 }'; then
+		return 0
+	fi
+	return 1
+}
+assert_managed_socket_can_be_removed() {
+	local path="$1" expected_path reference_status
+	expected_path="$(control_socket_for_role managed "$bind_port")"
+	[ "$path" = "$expected_path" ] || fail "Refusing to remove unexpected managed WayVNC control socket path: $path"
+	validate_control_socket_path "$path"
+	[ ! -L "$path" ] || fail "Managed WayVNC control socket path is a symlink; preserving it: $path"
+	[ -S "$path" ] || fail "Managed WayVNC control socket path exists but is not a socket: $path"
+	[ -O "$path" ] || fail "Managed WayVNC control socket is not owned by the current user: $path"
+	if wayvncctl -S "$path" --json version >/dev/null 2>&1; then
+		fail "Managed WayVNC control socket is live; refusing to remove it: $path"
+	fi
+	if socket_path_referenced_by_ss "$path"; then
+		reference_status=0
+	else
+		reference_status=$?
+	fi
+	case "$reference_status" in
+		0) fail "Managed WayVNC control socket is referenced by a live Unix socket; preserving it: $path" ;;
+		1) return 0 ;;
+		*) fail "Could not prove managed WayVNC control socket is stale with ss; preserving it: $path" ;;
+	esac
+}
+prepare_control_socket() {
+	local path="$1" role="$2"
+	validate_control_socket_path "$path"
+	if [ ! -e "$path" ]; then
+		return 0
+	fi
+	if [ "$role" != "managed" ]; then
+		fail "Refusing to reuse existing $role WayVNC control socket: $path"
+	fi
+	assert_managed_socket_can_be_removed "$path"
+	# Same-user TOCTOU cannot be eliminated for pathname sockets; recheck immediately before unlinking and fail closed on ambiguity.
+	assert_managed_socket_can_be_removed "$path"
+	rm -f -- "$path"
+	log "Removed stale installer-owned managed WayVNC control socket: $path"
+}
 instances_tsv() {
 	hyprctl instances -j 2>/dev/null | python3 -c '
 import json, sys
@@ -191,10 +428,7 @@ sys.exit(1)
 select_session() {
 	local attempt runtime candidates instance wl_socket sleep_seconds session_attempts
 	session_attempts="${WAYVNC_SESSION_ATTEMPTS:-30}"
-	runtime="${XDG_RUNTIME_DIR:-}"
-	if [ -z "$runtime" ] || [ ! -d "$runtime" ]; then
-		runtime="/run/user/$(id -u)"
-	fi
+	runtime="$(runtime_dir_value)"
 	export XDG_RUNTIME_DIR="$runtime"
 	unset HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
 	for attempt in $(seq 1 "$session_attempts"); do
@@ -215,26 +449,31 @@ select_session() {
 	done
 	fail "No active Hyprland instance from 'hyprctl instances -j' had an existing Wayland socket and Virtual-1. Run: hyprctl instances -j && hyprctl monitors -j"
 }
-for cmd in tailscale wayvnc hyprctl awk python3 grep id sleep; do
+for cmd in tailscale wayvnc wayvncctl hyprctl ss awk python3 grep dirname id sleep; do
 	require_cmd "$cmd"
 done
 bind_port="${WAYVNC_BIND_PORT:-5900}"
-case "$bind_port" in *[!0-9]*|"") fail "Invalid WAYVNC_BIND_PORT: $bind_port" ;; esac
+validate_socket_port "$bind_port"
+socket_role="${WAYVNC_SOCKET_ROLE:-managed}"
+validate_socket_role "$socket_role"
 tailscale_ip="$(tailscale ip -4 2>/dev/null | awk 'NR == 1 {print $1}')"
 [ -n "$tailscale_ip" ] || fail "No Tailscale IPv4 detected. Run: sudo systemctl enable --now tailscaled.service && sudo tailscale up --ssh"
 session_target="$(select_session)"
 wayland_display="${session_target%%:*}"
 output_name="${session_target#*:}"
+control_socket="$(control_socket_for_role "$socket_role" "$bind_port")"
 export WAYLAND_DISPLAY="$wayland_display"
 export XKB_DEFAULT_LAYOUT=us
 export XKB_DEFAULT_VARIANT=
 export XKB_DEFAULT_OPTIONS=
 if [ "${WAYVNC_VALIDATE_ONLY:-0}" = "1" ]; then
+	validate_control_socket_path "$control_socket"
 	log "Validated WayVNC target ${WAYLAND_DISPLAY}/${output_name} on ${tailscale_ip}:${bind_port}"
 	exit 0
 fi
-log "Starting WayVNC on ${tailscale_ip}:${bind_port} for ${WAYLAND_DISPLAY}/${output_name} with keyboard layout us"
-exec wayvnc -L info --keyboard=us --output="$output_name" "${tailscale_ip}:${bind_port}"
+prepare_control_socket "$control_socket" "$socket_role"
+log "Starting WayVNC on ${tailscale_ip}:${bind_port} for ${WAYLAND_DISPLAY}/${output_name} with keyboard layout us and control socket ${control_socket}"
+exec wayvnc -S "$control_socket" -L info --keyboard=us --output="$output_name" "${tailscale_ip}:${bind_port}"
 LAUNCHER
 	chmod 0755 "$tmp_path"
 	mv -f "$tmp_path" "$LAUNCHER_PATH"
@@ -268,7 +507,7 @@ SERVICE
 }
 
 validate_launcher_session() {
-	WAYVNC_VALIDATE_ONLY=1 WAYVNC_BIND_PORT="$PROBE_PORT" "$LAUNCHER_PATH"
+	WAYVNC_VALIDATE_ONLY=1 WAYVNC_SOCKET_ROLE=probe WAYVNC_BIND_PORT="$PROBE_PORT" "$LAUNCHER_PATH"
 }
 
 preflight_port_5900_state() {
@@ -323,16 +562,35 @@ verify_listener_exact() {
 	print_info "$label listener verified on Tailscale only: ${tailscale_ip}:${port} (pid $expected_pid)"
 }
 
+verify_control_socket_live() {
+	local socket_path="$1" label="$2"
+	if ! path_is_in_socket_namespace "$socket_path"; then
+		echo "$label control socket is outside installer namespace: $socket_path" >&2
+		return 1
+	fi
+	if ! wayvncctl -S "$socket_path" --json version >/dev/null 2>&1; then
+		echo "$label control socket did not respond to wayvncctl -S $socket_path --json version" >&2
+		return 1
+	fi
+	print_info "$label control socket verified: $socket_path"
+}
+
 run_probe() {
 	print_info "Running reversible WayVNC probe on private port $PROBE_PORT before stopping existing remote desktop paths..."
-	WAYVNC_BIND_PORT="$PROBE_PORT" "$LAUNCHER_PATH" &
+	WAYVNC_SOCKET_ROLE=probe WAYVNC_BIND_PORT="$PROBE_PORT" "$LAUNCHER_PATH" &
 	PROBE_PID="$!"
+	PROBE_SOCKET_PATH="$(installer_socket_path probe "$PROBE_PORT" "$PROBE_PID")"
 	if ! verify_listener_exact "$PROBE_PORT" "$PROBE_PID" "WayVNC probe"; then
 		cleanup_probe
 		die "WayVNC probe failed; Sunshine and existing port $MANAGED_PORT processes were left untouched."
 	fi
+	if ! verify_control_socket_live "$PROBE_SOCKET_PATH" "WayVNC probe"; then
+		cleanup_probe
+		die "WayVNC probe control socket verification failed; Sunshine and existing port $MANAGED_PORT processes were left untouched."
+	fi
 	cleanup_probe
 	PROBE_PID=""
+	PROBE_SOCKET_PATH=""
 }
 
 wait_for_port_release() {
@@ -375,16 +633,22 @@ release_port_5900() {
 
 attempt_rollback_5900() {
 	print_warning "Attempting rollback: starting the validated WayVNC launcher manually on port $MANAGED_PORT."
-	WAYVNC_BIND_PORT="$MANAGED_PORT" "$LAUNCHER_PATH" &
+	WAYVNC_SOCKET_ROLE=rollback WAYVNC_BIND_PORT="$MANAGED_PORT" "$LAUNCHER_PATH" &
 	ROLLBACK_PID="$!"
+	ROLLBACK_SOCKET_PATH="$(installer_socket_path rollback "$MANAGED_PORT" "$ROLLBACK_PID")"
 	if verify_listener_exact "$MANAGED_PORT" "$ROLLBACK_PID" "Rollback WayVNC"; then
-		print_warning "Rollback WayVNC is running as pid $ROLLBACK_PID. Manage it manually or rerun the installer after fixing the service failure."
+		if verify_control_socket_live "$ROLLBACK_SOCKET_PATH" "Rollback WayVNC"; then
+			print_warning "Rollback WayVNC is running as pid $ROLLBACK_PID with control socket $ROLLBACK_SOCKET_PATH. Manage it manually or rerun the installer after fixing the service failure."
+			return 0
+		fi
+		print_warning "Rollback WayVNC TCP listener is running, but its control socket did not verify: $ROLLBACK_SOCKET_PATH"
 		return 0
 	fi
 	if kill -0 "$ROLLBACK_PID" 2>/dev/null; then
 		kill "$ROLLBACK_PID" 2>/dev/null || true
 		wait "$ROLLBACK_PID" 2>/dev/null || true
 	fi
+	remove_exact_installer_socket "$ROLLBACK_SOCKET_PATH" "rollback"
 	print_warning "Rollback WayVNC failed. Use SSH and inspect: journalctl --user -u $SERVICE_NAME -b --no-pager"
 	return 1
 }
@@ -399,7 +663,7 @@ fail_after_port_mutation() {
 }
 
 start_managed_service() {
-	local main_pid
+	local main_pid managed_socket
 	systemctl --user daemon-reload
 	if ! release_port_5900; then
 		fail_after_port_mutation "Could not release port $MANAGED_PORT for managed WayVNC."
@@ -411,6 +675,10 @@ start_managed_service() {
 	[ -n "$main_pid" ] && [ "$main_pid" != "0" ] || fail_after_port_mutation "Could not determine $SERVICE_NAME MainPID after start."
 	if ! verify_listener_exact "$MANAGED_PORT" "$main_pid" "Managed WayVNC service"; then
 		fail_after_port_mutation "Managed WayVNC listener verification failed."
+	fi
+	managed_socket="$(installer_socket_path managed "$MANAGED_PORT")"
+	if ! verify_control_socket_live "$managed_socket" "Managed WayVNC service"; then
+		fail_after_port_mutation "Managed WayVNC control socket verification failed."
 	fi
 }
 
