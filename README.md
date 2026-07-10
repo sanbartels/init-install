@@ -82,6 +82,7 @@ Instala la base mínima y drivers:
 Permite elegir componentes de escritorio:
 
 - Hyprland
+- Hyprland startup (greetd)
 - swaync
 - Rofi
 - Kitty
@@ -89,6 +90,60 @@ Permite elegir componentes de escritorio:
 - GNOME Keyring
 
 Hyprland queda como único compositor gestionado por este dot installer. Los wallpapers se gestionan con Hyprpaper usando `~/.config/wallpapers` en orden aleatorio cada 15 minutos.
+
+Hyprland boot startup is configured separately from the Hyprland package install:
+
+- Install from the menu: `Install desktop / bar -> Hyprland startup (greetd)`.
+- Before deployment, prime sudo interactively so the installer never prompts or hangs:
+
+  ```bash
+  sudo -v
+  ./hyprland/configure_hyprland_startup.sh
+  ```
+
+- The module installs `greetd`/`greetd-agreety` only when missing, writes `~/.local/bin/init-install-start-hyprland`, and manages `/etc/greetd/config.toml` with a `greetd` `[initial_session]` autologin for the invoking non-root desktop user.
+- Security tradeoff: Provider console access reaches the autologged-in desktop session by design. Keep SSH/Tailscale as the primary recovery path and use provider console only as break-glass access.
+- The installer validates the packaged `greetd.service` has `Conflicts=getty@tty1.service`; it does not manually disable unrelated getty units.
+- Do not reboot blindly. Go/no-go requires all of these checks to pass first:
+
+  ```bash
+  systemctl status greetd.service --no-pager
+  journalctl -u greetd.service -b --no-pager
+  test -x ~/.local/bin/init-install-start-hyprland
+  sudo sed -n '1,120p' /etc/greetd/config.toml
+  sudo grep -Fx '# init-install managed Hyprland startup' /etc/greetd/config.toml
+  # Compare with the exact SHA-256 printed by the installer before rollback/remove:
+  [ "$(sudo python3 -c 'import hashlib, pathlib; print(hashlib.sha256(pathlib.Path("/etc/greetd/config.toml").read_bytes()).hexdigest())')" = "<managed-config-sha256-from-installer-output>" ]
+  hyprctl instances -j
+  test -S "$XDG_RUNTIME_DIR/$(hyprctl instances -j | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["wl_socket"])')"
+  hyprctl monitors -j | grep -F 'Virtual-1'
+  systemctl --user status wayvnc.service --no-pager
+  journalctl --user -u wayvnc.service -b --no-pager
+  ss -H -ltnp | grep "$(tailscale ip -4 | head -n1):5900"
+  ```
+
+- SSH break-glass rollback is guarded: restore/remove only if the current config SHA-256 still matches the exact managed content printed by the installer. If the hash differs or the backup path is unknown, stop and preserve the file for manual inspection.
+
+  ```bash
+  sudo systemctl disable --now greetd.service
+  journalctl -u greetd.service -b --no-pager
+  managed_config_sha256='<managed-config-sha256-from-installer-output>'
+  # Use the exact backup path printed by the installer, or leave empty if unknown.
+  # Use __NO_PRIOR_CONFIG__ only when the installer explicitly reported no prior config.
+  backup_path='<printed-backup-path-or-empty-or-__NO_PRIOR_CONFIG__>'
+  current_config_sha256="$(sudo python3 -c 'import hashlib, pathlib; print(hashlib.sha256(pathlib.Path("/etc/greetd/config.toml").read_bytes()).hexdigest())')"
+  if [ "$current_config_sha256" != "$managed_config_sha256" ]; then
+    echo "greetd config changed after install; preserving it" >&2
+    exit 1
+  elif [ -n "$backup_path" ] && [ "$backup_path" != "__NO_PRIOR_CONFIG__" ]; then
+    sudo install -m 0644 "$backup_path" /etc/greetd/config.toml
+  elif [ "$backup_path" = "__NO_PRIOR_CONFIG__" ]; then
+    sudo rm -f /etc/greetd/config.toml
+  else
+    echo "prior backup path is unknown; preserving config" >&2
+    exit 1
+  fi
+  ```
 
 Para escritorio remoto, la opción normal es WayVNC enlazado solo a la IP Tailscale del equipo. Sunshine se conserva instalado como material de rollback, pero el instalador normal lo desactiva porque el VPS actual no ofrece una ruta gráfica/GPU fiable para Sunshine.
 

@@ -288,6 +288,7 @@ DESKTOP_SECTION = Section(
     "Entornos gráficos, shell/barra y componentes visuales",
     (
         Category("hyprland", "Hyprland", "Instala Hyprland y dependencias", "Paquetes y acciones del módulo hyprland.", scripts("hyprland/install_hyprland.sh"), install_detector=lambda: command_exists("Hyprland") or command_exists("hyprland")),
+        Category("hyprland_startup", "Hyprland startup (greetd)", "Configura greetd autologin para arrancar Hyprland al boot", "Acciones:\n- instala greetd/greetd-agreety si faltan\n- crea launcher gestionado en ~/.local/bin\n- configura /etc/greetd/config.toml con initial_session\n- habilita greetd.service", scripts("hyprland/configure_hyprland_startup.sh"), install_detector=lambda: False),
         Category("eww", "eww", "Widget system para escritorio", package_text("eww"), internal_runner=install_yay_packages("eww", ["eww"])),
         Category("swaync", "swaync", "Centro de notificaciones", package_text("swaync", "python-gobject"), scripts("swaync/install_swaync.sh")),
         Category("rofi", "Rofi", "Launcher y applets", package_text("rofi"), scripts("rofi/install_rofi.sh")),
