@@ -21,6 +21,23 @@ PROBE_SOCKET_PATH=""
 ROLLBACK_PID=""
 ROLLBACK_SOCKET_PATH=""
 MANUAL_5900_STOPPED=0
+TRANSACTION_ACTIVE=0
+TRANSACTION_SUCCESS=0
+LAUNCHER_EXISTED=0
+LAUNCHER_BACKUP_PATH=""
+MANAGED_LAUNCHER_HASH=""
+SERVICE_EXISTED=0
+SERVICE_BACKUP_PATH=""
+MANAGED_SERVICE_HASH=""
+SERVICE_WAS_ENABLED=0
+SERVICE_WAS_ACTIVE=0
+SUNSHINE_RETIREMENT_ACTIVE=0
+SUNSHINE_RETIREMENT_SUCCESS=0
+SUNSHINE_ALIAS_TARGET=""
+SUNSHINE_ALIAS_REMOVED=0
+SUNSHINE_UNIT_NAMES=()
+SUNSHINE_UNIT_WAS_ENABLED=()
+SUNSHINE_UNIT_WAS_ACTIVE=()
 
 print_info() { echo -e "${GREEN}[WAYVNC]${NC} $*"; }
 print_warning() { echo -e "${YELLOW}[WAYVNC]${NC} $*"; }
@@ -97,6 +114,153 @@ canonical_path() {
 import os, sys
 print(os.path.realpath(sys.argv[1]))
 PY
+}
+
+file_hash() {
+	python3 - "$1" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+print(hashlib.sha256(path.read_bytes()).hexdigest())
+PY
+}
+
+snapshot_managed_file() {
+	local path="$1" role="$2" backup_var="$3" existed_var="$4"
+	[ ! -L "$path" ] || die "Refusing to overwrite symlinked $role path: $path"
+	if [ -e "$path" ]; then
+		[ -f "$path" ] || die "Refusing to overwrite non-regular $role path: $path"
+		local backup_path
+		backup_path="$(mktemp)"
+		cp -p "$path" "$backup_path"
+		printf -v "$backup_var" '%s' "$backup_path"
+		printf -v "$existed_var" '%s' 1
+	else
+		printf -v "$backup_var" '%s' ""
+		printf -v "$existed_var" '%s' 0
+	fi
+}
+
+restore_managed_file() {
+	local path="$1" role="$2" backup_path="$3" existed="$4" managed_hash="$5" mode="$6" current_hash
+	[ -n "$managed_hash" ] || return 0
+	if [ ! -e "$path" ]; then
+		return 0
+	fi
+	current_hash="$(file_hash "$path" 2>/dev/null || true)"
+	if [ "$current_hash" != "$managed_hash" ]; then
+		print_warning "Current $role no longer matches installed managed content; preserving it: $path"
+		return 1
+	fi
+	if [ "$existed" -eq 1 ] && [ -n "$backup_path" ]; then
+		install -m "$mode" "$backup_path" "$path"
+		print_warning "Restored previous $role: $path"
+	else
+		rm -f -- "$path"
+		print_warning "Removed newly installed $role: $path"
+	fi
+}
+
+cleanup_transaction_backups() {
+	rm -f -- "${LAUNCHER_BACKUP_PATH:-}" "${SERVICE_BACKUP_PATH:-}" 2>/dev/null || true
+}
+
+capture_service_state() {
+	if systemctl --user is-enabled --quiet "$SERVICE_NAME" >/dev/null 2>&1; then
+		SERVICE_WAS_ENABLED=1
+	else
+		SERVICE_WAS_ENABLED=0
+	fi
+	if systemctl --user is-active --quiet "$SERVICE_NAME" >/dev/null 2>&1; then
+		SERVICE_WAS_ACTIVE=1
+	else
+		SERVICE_WAS_ACTIVE=0
+	fi
+}
+
+restore_service_state() {
+	systemctl --user daemon-reload >/dev/null 2>&1 || true
+	if [ "$SERVICE_WAS_ENABLED" -eq 1 ] && [ "$SERVICE_WAS_ACTIVE" -eq 1 ]; then
+		systemctl --user enable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+	elif [ "$SERVICE_WAS_ENABLED" -eq 1 ]; then
+		systemctl --user enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+	elif [ "$SERVICE_WAS_ACTIVE" -eq 1 ]; then
+		systemctl --user start "$SERVICE_NAME" >/dev/null 2>&1 || true
+	else
+		systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+	fi
+}
+
+rollback_managed_files() {
+	[ "$TRANSACTION_ACTIVE" -eq 1 ] || return 0
+	[ "$TRANSACTION_SUCCESS" -ne 1 ] || return 0
+	print_warning "Transactional rollback: restoring previous WayVNC launcher/unit and service state."
+	systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+	restore_managed_file "$SERVICE_PATH" "WayVNC service unit" "$SERVICE_BACKUP_PATH" "$SERVICE_EXISTED" "$MANAGED_SERVICE_HASH" 0644 || true
+	restore_managed_file "$LAUNCHER_PATH" "WayVNC launcher" "$LAUNCHER_BACKUP_PATH" "$LAUNCHER_EXISTED" "$MANAGED_LAUNCHER_HASH" 0755 || true
+	restore_service_state
+}
+
+capture_sunshine_service_states() {
+	local unit
+	SUNSHINE_UNIT_NAMES=()
+	SUNSHINE_UNIT_WAS_ENABLED=()
+	SUNSHINE_UNIT_WAS_ACTIVE=()
+	for unit in "${SUNSHINE_UNITS[@]}"; do
+		if sunshine_unit_exists "$unit"; then
+			SUNSHINE_UNIT_NAMES+=("$unit")
+			if systemctl --user is-enabled --quiet "$unit" >/dev/null 2>&1; then
+				SUNSHINE_UNIT_WAS_ENABLED+=(1)
+			else
+				SUNSHINE_UNIT_WAS_ENABLED+=(0)
+			fi
+			if systemctl --user is-active --quiet "$unit" >/dev/null 2>&1; then
+				SUNSHINE_UNIT_WAS_ACTIVE+=(1)
+			else
+				SUNSHINE_UNIT_WAS_ACTIVE+=(0)
+			fi
+		fi
+	done
+	SUNSHINE_RETIREMENT_ACTIVE=1
+}
+
+restore_sunshine_retirement() {
+	local index unit was_enabled was_active
+	[ "$SUNSHINE_RETIREMENT_ACTIVE" -eq 1 ] || return 0
+	[ "$SUNSHINE_RETIREMENT_SUCCESS" -ne 1 ] || return 0
+	print_warning "Sunshine retirement did not complete; restoring its previous user-service state while keeping verified WayVNC available."
+	if [ "$SUNSHINE_ALIAS_REMOVED" -eq 1 ] && [ ! -e "$SUNSHINE_ALIAS" ] && [ ! -L "$SUNSHINE_ALIAS" ]; then
+		ln -s "$SUNSHINE_ALIAS_TARGET" "$SUNSHINE_ALIAS" || true
+	fi
+	systemctl --user daemon-reload >/dev/null 2>&1 || true
+	for index in "${!SUNSHINE_UNIT_NAMES[@]}"; do
+		unit="${SUNSHINE_UNIT_NAMES[$index]}"
+		was_enabled="${SUNSHINE_UNIT_WAS_ENABLED[$index]}"
+		was_active="${SUNSHINE_UNIT_WAS_ACTIVE[$index]}"
+		if [ "$was_enabled" -eq 1 ] && [ "$was_active" -eq 1 ]; then
+			systemctl --user enable --now "$unit" >/dev/null 2>&1 || true
+		elif [ "$was_enabled" -eq 1 ]; then
+			systemctl --user enable "$unit" >/dev/null 2>&1 || true
+		elif [ "$was_active" -eq 1 ]; then
+			systemctl --user start "$unit" >/dev/null 2>&1 || true
+		else
+			systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+		fi
+	done
+}
+
+cleanup_on_exit() {
+	local status="$?"
+	cleanup_probe
+	if [ "$status" -ne 0 ]; then
+		restore_sunshine_retirement || true
+		rollback_managed_files || true
+		cleanup_transaction_backups
+	else
+		cleanup_transaction_backups
+	fi
 }
 
 validate_socket_port() {
@@ -195,7 +359,7 @@ cleanup_failed_service() {
 	systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
 }
 
-trap cleanup_probe EXIT
+trap cleanup_on_exit EXIT
 
 install_prerequisites() {
 	require_cmd pacman
@@ -227,7 +391,7 @@ install_prerequisites() {
 
 preflight_required_state() {
 	local cmd tailscale_ip
-	for cmd in systemctl tailscale wayvnc wayvncctl hyprctl ss ps awk grep python3 mktemp readlink dirname id kill sleep; do
+	for cmd in systemctl tailscale wayvnc wayvncctl hyprctl ss ps awk grep python3 mktemp readlink dirname id kill sleep cp install ln; do
 		require_cmd "$cmd"
 	done
 	for package in wayvnc tailscale; do
@@ -254,6 +418,11 @@ write_launcher() {
 	preflight_managed_path "$LAUNCHER_PATH"
 	local tmp_path
 	tmp_path="$(mktemp "${LAUNCHER_PATH}.tmp.XXXXXX")"
+	if [ "$TRANSACTION_ACTIVE" -eq 0 ]; then
+		capture_service_state
+		TRANSACTION_ACTIVE=1
+	fi
+	snapshot_managed_file "$LAUNCHER_PATH" "WayVNC launcher" LAUNCHER_BACKUP_PATH LAUNCHER_EXISTED
 	cat > "$tmp_path" <<'LAUNCHER'
 #!/bin/bash
 set -euo pipefail
@@ -426,12 +595,28 @@ sys.exit(1)
 '
 }
 select_session() {
-	local attempt runtime candidates instance wl_socket sleep_seconds session_attempts
-	session_attempts="${WAYVNC_SESSION_ATTEMPTS:-30}"
+	local attempt runtime candidates instance wl_socket sleep_seconds session_attempts max_label
+	if [ -n "${WAYVNC_SESSION_ATTEMPTS:-}" ]; then
+		session_attempts="$WAYVNC_SESSION_ATTEMPTS"
+	else
+		case "${socket_role:-managed}" in
+			managed) session_attempts=0 ;;
+			*) session_attempts=30 ;;
+		esac
+	fi
+	case "$session_attempts" in
+		""|*[!0-9]*) fail "WAYVNC_SESSION_ATTEMPTS must be a non-negative integer; use 0 for managed infinite wait" ;;
+	esac
+	if [ "$session_attempts" -eq 0 ]; then
+		max_label="unbounded"
+	else
+		max_label="$session_attempts"
+	fi
 	runtime="$(runtime_dir_value)"
 	export XDG_RUNTIME_DIR="$runtime"
 	unset HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
-	for attempt in $(seq 1 "$session_attempts"); do
+	attempt=1
+	while [ "$session_attempts" -eq 0 ] || [ "$attempt" -le "$session_attempts" ]; do
 		candidates="$(instances_tsv || true)"
 		while IFS=$'\t' read -r instance wl_socket; do
 			[ -n "$instance" ] && [ -n "$wl_socket" ] || continue
@@ -444,8 +629,11 @@ select_session() {
 			fi
 		done <<< "$candidates"
 		sleep_seconds=$((attempt < 10 ? 2 : 5))
-		log "Waiting for an active Hyprland instance with a valid Wayland socket and Virtual-1 in $runtime (attempt $attempt/$session_attempts)..."
+		if [ "$session_attempts" -ne 0 ] || [ "$attempt" -eq 1 ] || [ $((attempt % 12)) -eq 0 ]; then
+			log "Waiting for an active Hyprland instance with a valid Wayland socket and Virtual-1 in $runtime (attempt $attempt/$max_label)..."
+		fi
 		sleep "$sleep_seconds"
+		attempt=$((attempt + 1))
 	done
 	fail "No active Hyprland instance from 'hyprctl instances -j' had an existing Wayland socket and Virtual-1. Run: hyprctl instances -j && hyprctl monitors -j"
 }
@@ -476,7 +664,9 @@ log "Starting WayVNC on ${tailscale_ip}:${bind_port} for ${WAYLAND_DISPLAY}/${ou
 exec wayvnc -S "$control_socket" -L info --keyboard=us --output="$output_name" "${tailscale_ip}:${bind_port}"
 LAUNCHER
 	chmod 0755 "$tmp_path"
+	MANAGED_LAUNCHER_HASH="$(file_hash "$tmp_path")"
 	mv -f "$tmp_path" "$LAUNCHER_PATH"
+	[ "$(file_hash "$LAUNCHER_PATH")" = "$MANAGED_LAUNCHER_HASH" ] || die "Managed WayVNC launcher hash mismatch after install: $LAUNCHER_PATH"
 	print_info "Installed managed WayVNC launcher: $LAUNCHER_PATH"
 }
 
@@ -484,25 +674,29 @@ write_service() {
 	preflight_managed_path "$SERVICE_PATH"
 	local tmp_path
 	tmp_path="$(mktemp "${SERVICE_PATH}.tmp.XXXXXX")"
+	snapshot_managed_file "$SERVICE_PATH" "WayVNC service unit" SERVICE_BACKUP_PATH SERVICE_EXISTED
 	cat > "$tmp_path" <<SERVICE
 [Unit]
 Description=WayVNC bound to Tailscale for the active Hyprland session
 After=graphical-session.target
 Wants=graphical-session.target
 StartLimitIntervalSec=300
-StartLimitBurst=6
+StartLimitBurst=3
 [Service]
 Type=simple
 ExecStart=$LAUNCHER_PATH
 Restart=on-failure
-RestartSec=10s
+RestartSec=30s
 RestartSteps=5
 RestartMaxDelaySec=60s
+TimeoutStartSec=infinity
 [Install]
 WantedBy=default.target
 SERVICE
 	chmod 0644 "$tmp_path"
+	MANAGED_SERVICE_HASH="$(file_hash "$tmp_path")"
 	mv -f "$tmp_path" "$SERVICE_PATH"
+	[ "$(file_hash "$SERVICE_PATH")" = "$MANAGED_SERVICE_HASH" ] || die "Managed WayVNC service hash mismatch after install: $SERVICE_PATH"
 	print_info "Installed systemd user service: $SERVICE_PATH"
 }
 
@@ -691,32 +885,42 @@ sunshine_unit_exists() {
 verify_sunshine_listeners_gone() {
 	local listeners
 	listeners="$(ss -H -ltnp 2>/dev/null | awk '$1 == "LISTEN" && $4 ~ /:(47984|47989|47990)$/ {print}' || true)"
-	[ -z "$listeners" ] || die "Sunshine retirement failed; listeners remain on 47984/47989/47990:
-$listeners"
+	[ -z "$listeners" ] || {
+		echo "Sunshine retirement failed; listeners remain on 47984/47989/47990:
+$listeners" >&2
+		return 1
+	}
 }
 
 retire_sunshine_services() {
 	print_info "Disabling Sunshine user services after managed WayVNC was proven. Package/config/credentials/apps/logs/state are preserved."
-	local unit
-	for unit in "${SUNSHINE_UNITS[@]}"; do
-		if sunshine_unit_exists "$unit"; then
-			systemctl --user disable --now "$unit" || die "Could not disable/stop Sunshine unit: $unit"
-		fi
-	done
+	local unit alias_target
 	if [ -L "$SUNSHINE_ALIAS" ]; then
-		local alias_target
 		alias_target="$(readlink "$SUNSHINE_ALIAS" 2>/dev/null || true)"
 		case "$alias_target" in
 			/usr/lib/systemd/user/app-dev.lizardbyte.app.Sunshine.service|/usr/lib/systemd/user/sunshine.service|app-dev.lizardbyte.app.Sunshine.service|../app-dev.lizardbyte.app.Sunshine.service)
-				rm -f -- "$SUNSHINE_ALIAS"
-				print_info "Removed managed Sunshine alias symlink: $SUNSHINE_ALIAS -> $alias_target"
+				SUNSHINE_ALIAS_TARGET="$alias_target"
 				;;
 			*) die "Refusing to remove unexpected sunshine.service symlink target: $alias_target" ;;
 		esac
-	elif [ -e "$SUNSHINE_ALIAS" ]; then
-		die "Refusing to remove non-symlink Sunshine user unit: $SUNSHINE_ALIAS"
+	elif [ -e "$SUNSHINE_ALIAS" ] && [ ! -f "$SUNSHINE_ALIAS" ]; then
+		die "Refusing to retire non-regular Sunshine user unit: $SUNSHINE_ALIAS"
 	fi
-	verify_sunshine_listeners_gone
+	capture_sunshine_service_states
+	for unit in "${SUNSHINE_UNITS[@]}"; do
+		if sunshine_unit_exists "$unit"; then
+			systemctl --user disable --now "$unit" || return 1
+		fi
+	done
+	if [ -L "$SUNSHINE_ALIAS" ]; then
+		rm -f -- "$SUNSHINE_ALIAS"
+		SUNSHINE_ALIAS_REMOVED=1
+		print_info "Removed managed Sunshine alias symlink: $SUNSHINE_ALIAS -> $SUNSHINE_ALIAS_TARGET"
+	elif [ -e "$SUNSHINE_ALIAS" ]; then
+		print_info "Preserved custom regular Sunshine user unit: $SUNSHINE_ALIAS"
+	fi
+	verify_sunshine_listeners_gone || return 1
+	SUNSHINE_RETIREMENT_SUCCESS=1
 }
 
 install_prerequisites
@@ -727,7 +931,9 @@ validate_launcher_session
 preflight_port_5900_state
 run_probe
 start_managed_service
-retire_sunshine_services
+TRANSACTION_SUCCESS=1
+retire_sunshine_services || die "Sunshine retirement failed; previous Sunshine state was restored and verified WayVNC remains available."
+cleanup_transaction_backups
 
 print_info "WayVNC is installed as the normal remote desktop path."
 cat <<EOF

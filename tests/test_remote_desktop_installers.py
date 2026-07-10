@@ -582,8 +582,82 @@ exit 0
         for expected in ["hyprctl instances -j", "unset HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY", "WAYLAND_DISPLAY", "Virtual-1", "--keyboard=us", "--output=\"$output_name\"", "\"${tailscale_ip}:${bind_port}\""]:
             self.assertIn(expected, launcher_source)
         self.assertNotIn("100.66.222.119", launcher_source)
-        for expected in ["ExecStart=", "init-install-wayvnc", "Restart=on-failure", "RestartSteps=5", "StartLimitBurst=6"]:
+        for expected in ["ExecStart=", "init-install-wayvnc", "Restart=on-failure", "RestartSteps=5", "RestartSec=30s", "StartLimitBurst=3", "TimeoutStartSec=infinity"]:
             self.assertIn(expected, service_source)
+
+    def test_wayvnc_installer_preserves_a_custom_regular_sunshine_unit_while_retiring_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            sunshine_unit = home / ".config" / "systemd" / "user" / "sunshine.service"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            sunshine_unit.parent.mkdir(parents=True)
+            sunshine_unit.write_text("[Service]\nExecStart=/custom/sunshine\n", encoding="utf-8")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+            unit_source = sunshine_unit.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(unit_source, "[Service]\nExecStart=/custom/sunshine\n")
+        self.assertIn("systemctl --user disable --now sunshine.service", log)
+        self.assertIn("Preserved custom regular Sunshine user unit", result.stdout)
+
+    def test_wayvnc_installer_restores_sunshine_symlink_and_state_when_retirement_verification_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            sunshine_alias = home / ".config" / "systemd" / "user" / "sunshine.service"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            self._create_unix_socket(runtime_dir / "wayland-1")
+            sunshine_alias.parent.mkdir(parents=True)
+            sunshine_alias.symlink_to("/usr/lib/systemd/user/app-dev.lizardbyte.app.Sunshine.service")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66", sunshine_listener_after_retirement=True)
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir)}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+            launcher = home / ".local" / "bin" / "init-install-wayvnc"
+            service = home / ".config" / "systemd" / "user" / "wayvnc.service"
+            alias_is_symlink = sunshine_alias.is_symlink()
+            alias_target = os.readlink(sunshine_alias) if alias_is_symlink else ""
+            launcher_exists = launcher.exists()
+            service_exists = service.exists()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Sunshine retirement failed", result.stderr)
+        self.assertTrue(alias_is_symlink)
+        self.assertEqual(alias_target, "/usr/lib/systemd/user/app-dev.lizardbyte.app.Sunshine.service")
+        self.assertTrue(launcher_exists)
+        self.assertTrue(service_exists)
+        self.assertIn("systemctl --user enable --now app-dev.lizardbyte.app.Sunshine.service", log)
+        self.assertNotIn("systemctl --user disable --now wayvnc.service", log)
+
+    def test_wayvnc_managed_service_waits_indefinitely_but_probe_validation_is_bounded(self):
+        script = WAYVNC_INSTALLER.read_text(encoding="utf-8")
+
+        self.assertIn('managed) session_attempts=0 ;;', script)
+        self.assertIn('*) session_attempts=30 ;;', script)
+        self.assertIn('WAYVNC_SESSION_ATTEMPTS must be a non-negative integer', script)
+        self.assertIn('max_label="unbounded"', script)
+        self.assertIn('[ "$session_attempts" -eq 0 ] || [ "$attempt" -le "$session_attempts" ]', script)
+        self.assertIn('[ "$session_attempts" -ne 0 ] || [ "$attempt" -eq 1 ] || [ $((attempt % 12)) -eq 0 ]', script)
+        self.assertIn('RestartSec=30s', script)
+        self.assertIn('StartLimitBurst=3', script)
+        self.assertIn('TimeoutStartSec=infinity', script)
 
     def test_wayvnc_installer_uses_installer_owned_control_socket_namespace(self):
         script = WAYVNC_INSTALLER.read_text(encoding="utf-8")
@@ -958,6 +1032,38 @@ exit 0
         self.assertIn("No active Hyprland instance", result.stderr)
         self.assertNotIn("disable --now app-dev.lizardbyte.app.Sunshine.service", log)
 
+    def test_wayvnc_installer_restores_previous_launcher_unit_and_service_state_after_post_overwrite_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "bin"
+            home = root / "home"
+            calls = root / "calls.log"
+            runtime_dir = root / "run-user" / "1000"
+            launcher = home / ".local" / "bin" / "init-install-wayvnc"
+            service = home / ".config" / "systemd" / "user" / "wayvnc.service"
+            bin_dir.mkdir()
+            home.mkdir()
+            runtime_dir.mkdir(parents=True)
+            launcher.parent.mkdir(parents=True)
+            service.parent.mkdir(parents=True)
+            launcher.write_text("#!/bin/bash\necho previous wayvnc launcher\n", encoding="utf-8")
+            launcher.chmod(0o755)
+            service.write_text("[Service]\nExecStart=/previous/wayvnc\n", encoding="utf-8")
+            self._write_wayvnc_success_mocks(bin_dir, calls, "100.88.77.66")
+            env = {"PATH": f"{bin_dir}{os.pathsep}/usr/bin:/bin", "HOME": str(home), "USER": "tester", "XDG_RUNTIME_DIR": str(runtime_dir), "WAYVNC_SESSION_ATTEMPTS": "1"}
+
+            result = subprocess.run(["/bin/bash", str(WAYVNC_INSTALLER)], env=env, text=True, capture_output=True)
+            log = calls.read_text(encoding="utf-8")
+            launcher_source = launcher.read_text(encoding="utf-8")
+            service_source = service.read_text(encoding="utf-8")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No active Hyprland instance", result.stderr)
+        self.assertEqual(launcher_source, "#!/bin/bash\necho previous wayvnc launcher\n")
+        self.assertEqual(service_source, "[Service]\nExecStart=/previous/wayvnc\n")
+        self.assertIn("systemctl --user daemon-reload", log)
+        self.assertIn("systemctl --user enable --now wayvnc.service", log)
+
     def test_wayvnc_installer_rejects_managed_service_mainpid_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1053,6 +1159,7 @@ exit 0
         sudo_available: bool = True,
         sudo_action_available: bool = True,
         write_sudo: bool = True,
+        sunshine_listener_after_retirement: bool = False,
     ) -> None:
         listener = listener or f"{tailscale_ip}:5900"
         state_dir = bin_dir.parent
@@ -1069,6 +1176,7 @@ exit 0
                 (package_state / package).touch()
         sudo_preflight_status = 0 if sudo_available else 1
         sudo_action_status = 0 if sudo_action_available else 1
+        sunshine_listener_enabled = "1" if sunshine_listener_after_retirement else "0"
         if write_sudo:
             self._write_mock(
                 bin_dir / "sudo",
@@ -1215,6 +1323,7 @@ printf '%s\n' "$count" > {ss_count}
 if [ -f {probe_pid} ]; then printf 'LISTEN 0 4096 {tailscale_ip}:5901 0.0.0.0:* users:(("wayvnc",pid=%s,fd=8))\n' "$(cat {probe_pid})"; fi
 if [ ! -f {managed_pid} ] && [ "$count" -le {manual_release_delay_calls} ]; then printf 'LISTEN 0 4096 {tailscale_ip}:5900 0.0.0.0:* users:(("wayvnc",pid=777,fd=8))\n'; fi
 if [ -f {managed_pid} ]; then printf 'LISTEN 0 4096 {listener} 0.0.0.0:* users:(("wayvnc",pid={managed_listener_pid},fd=8))\n'; fi
+if [ {sunshine_listener_enabled} -eq 1 ]; then printf 'LISTEN 0 4096 {tailscale_ip}:47990 0.0.0.0:* users:(("sunshine",pid=5150,fd=8))\n'; fi
 """,
         )
         self._write_mock(bin_dir / "ps", "#!/bin/bash\nif [ \"${@: -1}\" = \"777\" ]; then printf 'tester\\n'; else printf 'otheruser\\n'; fi\n")

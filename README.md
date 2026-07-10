@@ -152,6 +152,7 @@ Remote desktop operational notes:
 - Install from the menu: `Install desktop / bar -> WayVNC`. The installer creates `~/.local/bin/init-install-wayvnc` and `~/.config/systemd/user/wayvnc.service`.
 - Reruns are least-privilege: if `wayvnc`, `tailscale`, and an enabled/active `tailscaled.service` are already present, the installer skips privileged package/service remediation. Fresh hosts still need non-interactive `sudo` for missing packages or inactive/disabled `tailscaled.service`.
 - The launcher discovers the current Tailscale IPv4 dynamically, waits for the active Hyprland/Wayland session, targets `Virtual-1`, uses `--keyboard=us`, and binds only to `<tailscale-ip>:5900`.
+- The managed service waits indefinitely for Hyprland/Wayland/`Virtual-1` after boot, avoiding restart storms while greetd starts the session. Installer probes remain bounded and fail fast before retiring Sunshine or replacing a working listener.
 - Verify and recover with:
 
   ```bash
